@@ -33,7 +33,8 @@ const GRAVITY = 900;          // partículas
 const FALL_MUL = 0.6;         // na descida a gravidade é menor (caixas caem mais devagar)
 const GRID = 30;               // tamanho da célula do quadriculado de fundo
 const BOX_GRAVITY = 280;      // caixas (menor = ficam mais tempo no ar)
-const GUN = { x: 70, y: 270 };
+const GUN = { x: 110, y: 270 };
+const SAFE_X = 285;            // as caixas não entram à esquerda desta linha (espaço da arma)
 
 let state = 'menu';            // menu | help | settings | play | pause | over
 let boxes, bullets, parts, floaters;
@@ -48,7 +49,8 @@ let ammo = MAX_AMMO;
 best = +(localStorage.getItem('stb_best') || 0);
 let wallet = +(localStorage.getItem('stb_wallet') || 0);   // total guardado, em centavos
 let runCoins = 0;                                           // ganho na partida atual
-const COIN_VALUE = { normal: 10, gold: 60 };
+const COIN_VALUE = { normal: 10, gold: 60, bolt: 20 };
+const fmt = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');   // 1000 -> 1,000
 const money = c => lang === 'en' ? '$' + (c / 100).toFixed(2) : 'R$ ' + (c / 100).toFixed(2).replace('.', ',');
 // ---------- idiomas ----------
 const STR = {
@@ -56,12 +58,13 @@ const STR = {
     play: 'JOGAR', howto: 'COMO JOGAR', settings: 'CONFIGURAÇÕES', sound: 'SOM', on: 'LIGADO', off: 'DESLIGADO', lang: 'IDIOMA', langName: 'PORTUGUÊS',
     back: 'VOLTAR', resume: 'CONTINUAR', menu: 'MENU PRINCIPAL', again: 'JOGAR DE NOVO',
     best: 'Recorde', wallet: 'Carteira', paused: 'PAUSADO', gameOver: 'FIM DE JOGO', newBest: 'Novo recorde!',
-    score: 'Pontos', points: 'PONTOS', earned: 'Ganhou', level: 'Nível', coins: 'Moedas', combo: 'Combo', bullet: '+1 bala',
+    zap: 'RAIO!', score: 'Pontos', points: 'PONTOS', earned: 'Ganhou', level: 'Nível', coins: 'Moedas', combo: 'Combo', bullet: '+1 bala',
     help: [
       ['Mire com o mouse. Clique ou ESPAÇO para atirar.', '#fff'],
       ['Caixa de madeira = 10 centavos, caixa de ouro = 60 centavos.', '#ffd23f'],
       ['Acerte as caixas antes que elas caiam. Cada uma que cai custa um ♥.', '#cfd6ff'],
       ['Caixa dourada: 50 pontos, +1 bala e às vezes +1 ♥.', '#ffd76a'],
+      ['Caixa de raio: solta raios e quebra todas as caixas no ar para você!', '#7fd0ff'],
       ['Bomba (!): NÃO atire! Acertar custa um ♥.', '#ff7b7b'],
       ['Você tem 10 balas. Acertar uma caixa devolve 1 bala; errar, não. Sem balas = fim de jogo.', '#cfd6ff'],
       ['Acertos seguidos criam combo e multiplicam os pontos.', '#cfd6ff'],
@@ -72,12 +75,13 @@ const STR = {
     play: 'PLAY', howto: 'HOW TO PLAY', settings: 'SETTINGS', sound: 'SOUND', on: 'ON', off: 'OFF', lang: 'LANGUAGE', langName: 'ENGLISH',
     back: 'BACK', resume: 'RESUME', menu: 'MAIN MENU', again: 'PLAY AGAIN',
     best: 'Best', wallet: 'Wallet', paused: 'PAUSED', gameOver: 'GAME OVER', newBest: 'New best!',
-    score: 'Score', points: 'POINTS', earned: 'Earned', level: 'Level', coins: 'Coins', combo: 'Combo', bullet: '+1 bullet',
+    zap: 'ZAP!', score: 'Score', points: 'POINTS', earned: 'Earned', level: 'Level', coins: 'Coins', combo: 'Combo', bullet: '+1 bullet',
     help: [
       ['Aim with the mouse. Click or press SPACE to shoot.', '#fff'],
       ['Wooden box = 10 cents, golden box = 60 cents.', '#ffd23f'],
       ['Hit the boxes before they fall. Each one that falls costs a ♥.', '#cfd6ff'],
       ['Golden box: 50 points, +1 bullet and sometimes +1 ♥.', '#ffd76a'],
+      ['Lightning box: strikes every box in the air and breaks them for you!', '#7fd0ff'],
       ['Bomb (!): DO NOT shoot! Hitting it costs a ♥.', '#ff7b7b'],
       ['You have 10 bullets. Hitting a box gives 1 back; a miss does not. No bullets = game over.', '#cfd6ff'],
       ['Consecutive hits build a combo and multiply your points.', '#cfd6ff'],
@@ -119,16 +123,16 @@ function beep(freq, dur, type = 'square', vol = 0.06, slide = 0) {
 // ---------- jogo ----------
 function reset() {
   boxes = []; bullets = []; parts = []; floaters = [];
-  score = 0; lives = 5; level = 1; combo = 0; kills = 0;
-  spawnTimer = 0.5; shootCd = 0; shake = 0;
+  score = 0; shownScore = 0; lives = 5; level = 1; combo = 0; kills = 0;
+  spawnTimer = 0.5; shootCd = 0; shake = 0; boom = 0;
   ammo = MAX_AMMO; runCoins = 0;
 }
 
 function spawnBox() {
   const r = Math.random();
-  const type = r < 0.14 ? 'bomb' : r < 0.26 ? 'gold' : 'normal';
-  const size = type === 'gold' ? 30 : 36 + Math.random() * 14;
-  const x = 260 + Math.random() * (W - 330);
+  const type = r < 0.12 ? 'bomb' : r < 0.18 ? 'bolt' : r < 0.28 ? 'gold' : 'normal';
+  const size = type === 'gold' ? 40 : 48 + Math.random() * 18;
+  const x = SAFE_X + size * 0.7 + Math.random() * (W - 70 - SAFE_X - size * 0.7);
   const apex = 140 + Math.random() * 330;          // altura do pico
   const vy = -Math.sqrt(2 * BOX_GRAVITY * apex);
   const speedMul = 1 + (level - 1) * 0.05;
@@ -152,7 +156,9 @@ function floatText(x, y, text, color) {
   floaters.push({ x, y, text, color, life: 1 });
 }
 
+let shownScore = 0;            // pontuação exibida: sobe de 1 em 1 até alcançar a real
 let bgHue = 228;               // matiz do fundo: muda conforme a pontuação
+let boom = 0, boomRGB = '255,200,120';   // clarão da explosão (0..1) e sua cor
 let flash = 0, flashRot = 0;
 const FLASH_TIME = 0.08;
 function muzzlePos() {
@@ -193,7 +199,7 @@ function shoot() {
 }
 
 function loseLife(x, y) {
-  lives--; combo = 0; shake = 10;
+  lives--; combo = 0; shake = Math.max(shake, 10);
   floatText(x, y, '-1 ♥', '#ff5d6c');
   beep(110, 0.35, 'sawtooth', 0.09, -60);
   if (lives <= 0) endGame();
@@ -208,6 +214,9 @@ function update(dt) {
   aim = Math.atan2(mouse.y - gunY(), mouse.x - GUN.x);
   aim = Math.max(-1.35, Math.min(1.35, aim));
   shootCd -= dt;
+  const gap = score - shownScore;
+  if (gap > 0) shownScore = Math.min(score, shownScore + Math.max(12, gap * 4) * dt);   // longe = rápido, perto = devagar
+  else shownScore = score;
   bgHue += (228 + score * 0.6 - bgHue) * Math.min(1, 3 * dt);   // transição suave
   if (held) shoot();
   shake = Math.max(0, shake - 30 * dt);
@@ -238,6 +247,8 @@ function update(dt) {
   for (const bx of boxes) {
     bx.vy += BOX_GRAVITY * (bx.vy > 0 ? FALL_MUL : 1) * dt;
     bx.x += bx.vx * dt; bx.y += bx.vy * dt; bx.rot += bx.vr * dt;
+    if (bx.x - bx.size * 0.7 < SAFE_X) { bx.x = SAFE_X + bx.size * 0.7; bx.vx = Math.abs(bx.vx); }   // quica na borda do espaço da arma
+    if (bx.x + bx.size * 0.7 > W) { bx.x = W - bx.size * 0.7; bx.vx = -Math.abs(bx.vx); }   // quica na borda direita da tela
     if (bx.vy < 0) bx.up = true;
 
     for (const b of bullets) {
@@ -257,9 +268,12 @@ function update(dt) {
   if (state === 'play' && ammo <= 0 && bullets.every(b => b.dead)) endGame();
 
   flash = Math.max(0, flash - dt);
+  boom = Math.max(0, boom - 2.2 * dt);
   for (const p of parts) {
     if (p.kind === 'spark') { p.vx *= 1 - 4 * dt; p.vy *= 1 - 4 * dt; }
-    else if (p.kind === 'ring') p.size += 260 * dt;
+    else if (p.kind === 'ring') p.size += (p.grow || 260) * dt;
+    else if (p.kind === 'bolt') { /* parado: só desaparece */ }
+    else if (p.kind === 'fire') { p.vx *= 1 - 3 * dt; p.vy = p.vy * (1 - 3 * dt) - 40 * dt; p.size += 30 * dt; }
     else if (p.kind === 'smoke') { p.vx *= 1 - 2.5 * dt; p.vy = p.vy * (1 - 2.5 * dt) - 25 * dt; p.size += 22 * dt; }
     else p.vy += GRAVITY * 0.8 * dt;
     p.x += p.vx * dt; p.y += p.vy * dt;
@@ -270,19 +284,76 @@ function update(dt) {
   floaters = floaters.filter(f => f.life > 0);
 }
 
+function explode(x, y) {
+  boom = 1; boomRGB = '255,200,120'; shake = 36;
+  burst(x, y, '#ff6b3d', 40, 560);
+  burst(x, y, '#ffd23f', 24, 420);
+  burst(x, y, '#333', 24, 340);
+  const fire = ['#ffd23f', '#ff8a3d', '#ff4d2e'];
+  for (let i = 0; i < 18; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 320, l = 0.4 + Math.random() * 0.4;
+    parts.push({ kind: 'fire', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: l, max: l,
+      size: 18 + Math.random() * 22, color: fire[i % 3], rot: 0, vr: 0 });
+  }
+  for (let i = 0; i < 10; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 30 + Math.random() * 140, l = 0.8 + Math.random() * 0.5;
+    parts.push({ kind: 'smoke', x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, life: l, max: l,
+      size: 16 + Math.random() * 14, color: '#555a70', rot: 0, vr: 0 });
+  }
+  parts.push({ kind: 'ring', x, y, vx: 0, vy: 0, life: 0.55, max: 0.55, size: 10, grow: 720, lw: 9, color: '#fff3b0', rot: 0, vr: 0 });
+  parts.push({ kind: 'ring', x, y, vx: 0, vy: 0, life: 0.7, max: 0.7, size: 0, grow: 460, lw: 6, color: '#ff8a5c', rot: 0, vr: 0 });
+  beep(55, 0.8, 'sine', 0.22, -20);
+  beep(130, 0.55, 'sawtooth', 0.13, -90);
+  beep(900, 0.25, 'square', 0.04, -800);
+}
+
+// raio: zigue-zague entre dois pontos
+function boltPath(x1, y1, x2, y2, jitter = 22) {
+  const pts = [[x1, y1]], n = 9, dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+  for (let i = 1; i < n; i++) {
+    const o = (Math.random() - 0.5) * 2 * jitter;
+    pts.push([x1 + dx * i / n + nx * o, y1 + dy * i / n + ny * o]);
+  }
+  pts.push([x2, y2]);
+  return pts;
+}
+function addBolt(x1, y1, x2, y2, life = 0.4) {
+  parts.push({ kind: 'bolt', x: x2, y: y2, vx: 0, vy: 0, life, max: life, size: 0, color: '#fff', rot: 0, vr: 0,
+    pts: boltPath(x1, y1, x2, y2) });
+}
+
+// caixa de raio: descarrega um raio em cada caixa no ar e quebra todas a favor do jogador
+function zapAll(src) {
+  const targets = boxes.filter(t => t !== src && !t.hit && t.y < H - 10);
+  boom = 0.8; boomRGB = '170,210,255'; shake = Math.max(shake, 16);
+  addBolt(src.x + (Math.random() - 0.5) * 60, -20, src.x, src.y, 0.5);
+  parts.push({ kind: 'ring', x: src.x, y: src.y, vx: 0, vy: 0, life: 0.45, max: 0.45, size: 6, grow: 600, lw: 7, color: '#9fd4ff', rot: 0, vr: 0 });
+  burst(src.x, src.y, '#7fd0ff', 22, 460);
+  for (const t of targets) {
+    t.hit = true;
+    addBolt(t.x + (Math.random() - 0.5) * 80, -20, t.x, t.y);   // raio caindo do céu
+    addBolt(src.x, src.y, t.x, t.y, 0.3);                       // corrente a partir da caixa de raio
+    parts.push({ kind: 'ring', x: t.x, y: t.y, vx: 0, vy: 0, life: 0.3, max: 0.3, size: 6, grow: 380, lw: 5, color: '#cfeaff', rot: 0, vr: 0 });
+    if (t.type === 'bomb') { burst(t.x, t.y, '#7fd0ff', 16, 380); floatText(t.x, t.y, 'OK', '#9fd4ff'); }   // bomba desarmada, sem perder vida
+    else { hitBox(t); burst(t.x, t.y, '#7fd0ff', 10, 380); }
+  }
+  floatText(src.x, src.y - 40, '⚡ ' + T().zap + (targets.length ? ' x' + targets.length : ''), '#9fd4ff');
+  beep(1400, 0.3, 'sawtooth', 0.07, -1200);
+  beep(260, 0.45, 'square', 0.07, -200);
+  for (let i = 0; i < 4; i++) setTimeout(() => beep(600 + Math.random() * 1200, 0.07, 'sawtooth', 0.04, -400), 40 + i * 55);
+}
+
 function hitBox(bx) {
   if (ammo < MAX_AMMO) ammo++;     // acertou qualquer caixa: recupera 1 bala
   if (bx.type === 'bomb') {
-    burst(bx.x, bx.y, '#ff6b3d', 30, 480);
-    burst(bx.x, bx.y, '#333', 15, 300);
     combo = 0;
+    explode(bx.x, bx.y);
     loseLife(bx.x, bx.y);
-    beep(80, 0.4, 'sawtooth', 0.12, -40);
     return;
   }
   combo++;
   kills++;
-  const base = bx.type === 'gold' ? 50 : 10;
+  const base = bx.type === 'gold' ? 50 : bx.type === 'bolt' ? 20 : 10;
   const coins = COIN_VALUE[bx.type];
   addCoins(coins);
   floatText(bx.x, bx.y + 22, '+' + coins + '¢', '#ffd23f');
@@ -299,6 +370,7 @@ function hitBox(bx) {
     lives++; floatText(bx.x, bx.y - 22, '+1 ♥', '#6dff9a');
   }
   shake = Math.max(shake, 4);
+  if (bx.type === 'bolt') zapAll(bx);
 }
 
 function segDist(x1, y1, x2, y2, px, py) {
@@ -309,19 +381,102 @@ function segDist(x1, y1, x2, y2, px, py) {
 }
 
 // ---------- desenho ----------
+const boxImgs = { normal: new Image(), gold: new Image(), bolt: new Image(), bomb: new Image() };
+boxImgs.normal.src = 'images/caixa de madeira.png';
+boxImgs.gold.src = 'images/caixa de ouro.png';
+boxImgs.bolt.src = 'images/caixa de raio.png';
+boxImgs.bomb.src = 'images/bomba.png';
+const BOMB_CROP = { x: 398, y: 310, w: 1080, h: 1355 }, BOMB_CENTER = { x: 925, y: 1150 }, BOMB_BODY = 1050;   // recorte, centro e diâmetro do corpo da bomba (coords da imagem)
+const BOX_CROPS = {   // área útil de cada imagem (sem a margem transparente)
+  normal: { x: 280, y: 282, w: 1360, h: 1306 },
+  gold: { x: 245, y: 244, w: 1429, h: 1425 },
+  bolt: { x: 233, y: 265, w: 1450, h: 1397 },
+};
+// brilho elétrico pulsando atrás da caixa de raio
+function drawBoltAura(s) {
+  const t = performance.now() / 1000, r = s * (0.95 + 0.12 * Math.sin(t * 14) + Math.random() * 0.06);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, r);
+  g.addColorStop(0, 'rgba(120,190,255,0.55)'); g.addColorStop(1, 'rgba(60,120,255,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.restore();
+}
+// faíscas/arcos que piscam ao redor da caixa de raio
+function drawBoltArcs(s) {
+  ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  const n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, r0 = s * 0.5, len = s * (0.25 + Math.random() * 0.35);
+    let x = Math.cos(a) * r0, y = Math.sin(a) * r0;
+    const pts = [[x, y]];
+    for (let k = 1; k <= 4; k++) {
+      const aa = a + (Math.random() - 0.5) * 1.2, d = len / 4;
+      x += Math.cos(aa) * d; y += Math.sin(aa) * d; pts.push([x, y]);
+    }
+    for (const [lw, col] of [[5, 'rgba(90,170,255,0.5)'], [2, '#ffffff']]) {
+      ctx.strokeStyle = col; ctx.lineWidth = lw;
+      ctx.beginPath(); pts.forEach((q, j) => j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+// caixa de ouro: halo dourado pulsando, reflexo de luz passando e estrelinhas cintilando
+function drawGoldHalo(s, seed) {
+  const t = performance.now() / 1000, r = s * (0.95 + 0.1 * Math.sin(t * 5 + seed));
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  const g = ctx.createRadialGradient(0, 0, s * 0.25, 0, 0, r);
+  g.addColorStop(0, 'rgba(255,215,90,0.55)'); g.addColorStop(1, 'rgba(255,170,30,0)');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawGoldShine(s, seed) {
+  const t = performance.now() / 1000, h = s / 2;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  ctx.save();
+  ctx.beginPath(); ctx.rect(-h, -h, s, s); ctx.clip();
+  const cx = -s + ((t * 0.9 + seed) % 2) * s * 1.3, w = s * 0.22;   // faixa de luz diagonal cruzando a caixa
+  const g = ctx.createLinearGradient(cx - w, -h, cx + w, h);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(0.5, 'rgba(255,255,230,0.75)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g; ctx.fillRect(-h, -h, s, s);
+  ctx.restore();
+  const spots = [[-0.28, -0.3], [0.3, 0.1], [-0.1, 0.32]];
+  spots.forEach(([px, py], i) => {
+    const a = Math.max(0, Math.sin(t * 4 + seed * 3 + i * 2.1)), r = s * 0.2 * a * a;
+    if (r < 1) return;
+    ctx.fillStyle = 'rgba(255,250,200,' + (0.5 + 0.5 * a) + ')';
+    ctx.beginPath();
+    ctx.moveTo(px * s, py * s - r); ctx.quadraticCurveTo(px * s, py * s, px * s + r, py * s);
+    ctx.quadraticCurveTo(px * s, py * s, px * s, py * s + r); ctx.quadraticCurveTo(px * s, py * s, px * s - r, py * s);
+    ctx.quadraticCurveTo(px * s, py * s, px * s, py * s - r); ctx.fill();
+  });
+  ctx.restore();
+}
 function drawBox(bx) {
   ctx.save();
   ctx.translate(bx.x, bx.y); ctx.rotate(bx.rot);
   const s = bx.size, h = s / 2;
-  if (bx.type === 'bomb') {
+  if (bx.type === 'bomb' && boxImgs.bomb.complete && boxImgs.bomb.naturalWidth) {
+    const k = s / BOMB_BODY;   // corpo da bomba ocupa o mesmo espaço do círculo antigo
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(boxImgs.bomb, BOMB_CROP.x, BOMB_CROP.y, BOMB_CROP.w, BOMB_CROP.h,
+      (BOMB_CROP.x - BOMB_CENTER.x) * k, (BOMB_CROP.y - BOMB_CENTER.y) * k, BOMB_CROP.w * k, BOMB_CROP.h * k);
+  } else if (bx.type === 'bomb') {
     ctx.fillStyle = '#2b2b33'; ctx.strokeStyle = '#ff4d4d'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.arc(0, 0, h, 0, 7); ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#ff4d4d'; ctx.font = 'bold ' + s * 0.6 + 'px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('!', 0, 2);
+  } else if (boxImgs[bx.type] && boxImgs[bx.type].complete && boxImgs[bx.type].naturalWidth) {
+    ctx.imageSmoothingQuality = 'high';
+    const c = BOX_CROPS[bx.type];
+    if (bx.type === 'bolt') drawBoltAura(s);
+    if (bx.type === 'gold') drawGoldHalo(s, bx.seed = bx.seed || Math.random() * 10);
+    ctx.drawImage(boxImgs[bx.type], c.x, c.y, c.w, c.h, -h, -h, s, s);
+    if (bx.type === 'bolt') drawBoltArcs(s);
+    if (bx.type === 'gold') drawGoldShine(s, bx.seed);
   } else {
-    const gold = bx.type === 'gold';
-    ctx.fillStyle = gold ? '#ffd23f' : '#c98a4b';
-    ctx.strokeStyle = gold ? '#a77b00' : '#6b4421'; ctx.lineWidth = 3;
+    const gold = bx.type === 'gold', bolt = bx.type === 'bolt';
+    ctx.fillStyle = gold ? '#ffd23f' : bolt ? '#2f6bff' : '#c98a4b';
+    ctx.strokeStyle = gold ? '#a77b00' : bolt ? '#0d2a7a' : '#6b4421'; ctx.lineWidth = 3;
     ctx.fillRect(-h, -h, s, s); ctx.strokeRect(-h, -h, s, s);
     ctx.beginPath();
     ctx.moveTo(-h, -h); ctx.lineTo(h, h); ctx.moveTo(h, -h); ctx.lineTo(-h, h);
@@ -333,23 +488,19 @@ function drawBox(bx) {
 }
 
 const gunImg = new Image();
-gunImg.src = 'images/pistola.png';     // imagem original já aponta para a direita
-const IMG_K = 0.07, IMG_PIVOT = { x: 300, y: 200 };   // escala e ponto de giro (coords da imagem)
-const MUZZLE_X = 134 * IMG_K + 62, MUZZLE_Y = 10 * IMG_K;   // ponta do cano em relação ao ponto de giro
+gunImg.src = 'images/pistola.png';     // a imagem aponta para a esquerda: é espelhada ao desenhar
+const IMG_K = 0.17, IMG_PIVOT = { x: 1046, y: 240 };   // escala e ponto de giro (coords da imagem original)
+const MUZZLE_X = (1046 - 235) * IMG_K, MUZZLE_Y = 0;   // ponta do cano em relação ao ponto de giro
 let recoil = 0;
 function gunY() { return GUN.y + Math.sin(performance.now() / 400) * 8; }
 
 function drawGun() {
   const gy = gunY();
-  // sombra no chão
-  ctx.fillStyle = '#0005';
-  ctx.beginPath(); ctx.ellipse(GUN.x, H - 7, 36 - (gy - GUN.y) * 0.5, 6, 0, 0, 7); ctx.fill();
-
   ctx.save();
   ctx.translate(GUN.x, gy); ctx.rotate(aim);
   ctx.translate(-recoil, 0);
   if (gunImg.complete && gunImg.naturalWidth) {
-    ctx.scale(IMG_K, IMG_K);
+    ctx.scale(-IMG_K, IMG_K);   // espelha na horizontal
     ctx.drawImage(gunImg, -IMG_PIVOT.x, -IMG_PIVOT.y);
     ctx.restore();
     recoil = Math.max(0, recoil - 80 * (1 / 60));
@@ -414,14 +565,13 @@ function draw() {
   // fundo
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, 'hsl(' + bgHue + ',32%,20%)'); g.addColorStop(1, 'hsl(' + bgHue + ',32%,10%)');
-  ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+  ctx.fillStyle = g; ctx.fillRect(-40, -40, W + 80, H + 80);
   // quadriculado translúcido
   ctx.strokeStyle = 'rgba(159,176,255,0.10)'; ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = 0; x <= W; x += GRID) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, H); }
   for (let y = 0; y <= H; y += GRID) { ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); }
   ctx.stroke();
-  ctx.fillStyle = '#2b3150'; ctx.fillRect(0, H - 14, W, 14);
 
   // linha de mira
   if (state === 'play') {
@@ -434,7 +584,10 @@ function draw() {
   // pontos grandes e transparentes no meio da tela (atrás das caixas)
   if (state === 'play' || state === 'pause') {
     ctx.globalAlpha = 0.2;
-    text(String(score), W / 2, H / 2, 200, '#fff');
+    const shrink = Math.min(1, (score - shownScore) / 200);   // 0 = alcançou, 1 = falta muito
+    const k = 1 - 0.25 * shrink;                               // encolhe quando falta muito, volta ao normal ao alcançar
+    const dx = shrink * (24 + 12 * Math.sin(performance.now() / 40));   // desliza para o lado e balança enquanto conta
+    text(fmt(Math.floor(shownScore)), W / 2 + dx, H / 2, 200 * k, '#fff');
     text(T().points, W / 2, H / 2 + 120, 28, '#fff');
     ctx.globalAlpha = 1;
   }
@@ -476,9 +629,26 @@ function draw() {
     }
     if (p.kind === 'ring') {
       ctx.globalAlpha = Math.max(0, p.life / p.max);
-      ctx.strokeStyle = p.color; ctx.lineWidth = 4 * (p.life / p.max) + 1;
+      ctx.strokeStyle = p.color; ctx.lineWidth = (p.lw || 4) * (p.life / p.max) + 1;
       ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.stroke();
       ctx.globalAlpha = 1; continue;
+    }
+    if (p.kind === 'bolt') {
+      const a = Math.max(0, p.life / p.max);
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.globalAlpha = Math.min(1, a * (0.6 + Math.random() * 0.6));   // pisca
+      for (const [lw, col] of [[14, 'rgba(70,140,255,0.45)'], [6, '#7fd0ff'], [2.5, '#ffffff']]) {
+        ctx.strokeStyle = col; ctx.lineWidth = lw;
+        ctx.beginPath(); p.pts.forEach((q, j) => j ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+      }
+      ctx.restore(); continue;
+    }
+    if (p.kind === 'fire') {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = Math.max(0, p.life / p.max) * 0.9;
+      const fg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size);
+      fg.addColorStop(0, '#fff8d0'); fg.addColorStop(0.4, p.color); fg.addColorStop(1, 'rgba(255,80,20,0)');
+      ctx.fillStyle = fg; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.fill();
+      ctx.restore(); continue;
     }
     if (p.kind === 'smoke') {
       ctx.globalAlpha = Math.max(0, p.life / p.max) * 0.35;
@@ -495,7 +665,6 @@ function draw() {
     text(f.text, f.x, f.y, 22, f.color);
     ctx.globalAlpha = 1;
   }
-  ctx.restore();
 
   // HUD
   if (state === 'play' || state === 'pause' || state === 'over') {
@@ -510,6 +679,10 @@ function draw() {
   }
 
   if (state !== 'play') drawScreen();
+  if (boom > 0) {   // clarão da explosão por cima de tudo
+    ctx.fillStyle = 'rgba(' + boomRGB + ',' + (0.55 * boom) + ')'; ctx.fillRect(-40, -40, W + 80, H + 80);
+  }
+  ctx.restore();
 }
 
 // ---------- menus ----------
@@ -590,12 +763,12 @@ function drawStat(cx, y, kind, label, value, color, sub) {
   text(value, x + 56, y + h / 2+ 9, size, '#fff', 'left');
 }
 function drawStats(y, sub) {
-  drawStat(W / 2 - 115, y, 'trophy', T().best, String(best), '#ffd76a', sub && sub.best);
+  drawStat(W / 2 - 115, y, 'trophy', T().best, fmt(best), '#ffd76a', sub && sub.best);
   drawStat(W / 2 + 115, y, 'coin', T().wallet, money(wallet), '#ffd23f', sub && sub.wallet);
 }
 
 function drawScreen() {
-  ctx.fillStyle = state === 'menu' ? '#0006' : '#000b'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = state === 'menu' ? '#0006' : '#000b'; ctx.fillRect(-40, -40, W + 80, H + 80);
   if (state === 'menu') {
     const bob = Math.sin(performance.now() / 500) * 5;
     const tg = ctx.createLinearGradient(0, 70 + bob, 0, 170 + bob);   // degradê azulado do título
@@ -615,7 +788,7 @@ function drawScreen() {
     text(T().paused, W / 2, 160, 60, '#fff');
   } else if (state === 'over') {
     text(T().gameOver, W / 2, 130, 60, '#ff5d6c');
-    text(T().score + ': ' + score, W / 2, 185, 32);
+    text(T().score + ': ' + fmt(score), W / 2, 185, 32);
     drawStats(225, { best: score >= best && score > 0 ? T().newBest : '', wallet: '+' + money(runCoins) });
   }
   const hv = hoverBtn();
