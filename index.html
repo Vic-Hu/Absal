@@ -156,6 +156,7 @@ function floatText(x, y, text, color) {
   floaters.push({ x, y, text, color, life: 1 });
 }
 
+let comboPop = 0;              // pulso do contador de combo a cada acerto seguido
 let shownScore = 0;            // pontuação exibida: sobe de 1 em 1 até alcançar a real
 let bgHue = 228;               // matiz do fundo: muda conforme a pontuação
 let boom = 0, boomRGB = '255,200,120';   // clarão da explosão (0..1) e sua cor
@@ -269,6 +270,7 @@ function update(dt) {
 
   flash = Math.max(0, flash - dt);
   boom = Math.max(0, boom - 2.2 * dt);
+  comboPop = Math.max(0, comboPop - 3 * dt);
   for (const p of parts) {
     if (p.kind === 'spark') { p.vx *= 1 - 4 * dt; p.vy *= 1 - 4 * dt; }
     else if (p.kind === 'ring') p.size += (p.grow || 260) * dt;
@@ -351,7 +353,7 @@ function hitBox(bx) {
     loseLife(bx.x, bx.y);
     return;
   }
-  combo++;
+  combo++; comboPop = 1;
   kills++;
   const base = bx.type === 'gold' ? 50 : bx.type === 'bolt' ? 20 : 10;
   const coins = COIN_VALUE[bx.type];
@@ -675,7 +677,13 @@ function draw() {
       ctx.fillStyle = i < ammo ? (i >= MAX_AMMO ? '#6dff9a' : '#ffd76a') : '#ffffff22';
       ctx.fillRect(20 + i * 14, H - 44, 8, 22);
     }
-    if (combo >= 3) text(T().combo + ' ' + combo + '!', 20, 58, 18, '#ffd76a', 'left');
+    if (combo >= 2) {   // aparece a cada acerto seguido, com um "pulo" a cada +1
+      ctx.save(); ctx.translate(20, 78); ctx.scale(1 + 0.45 * comboPop, 1 + 0.45 * comboPop);
+      const mult = 1 + Math.floor(combo / 3);
+      text(T().combo + ' ' + combo + '!', 0, 0, 30, comboPop > 0.5 ? '#fff' : '#ffd76a', 'left');
+      if (mult > 1) text('x' + mult, 0, 28, 20, '#ff9f43', 'left');
+      ctx.restore();
+    }
   }
 
   if (state !== 'play') drawScreen();
