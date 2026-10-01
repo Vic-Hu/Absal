@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shoot the Box</title>
+<title>Absal</title>
 <style>
   html, body { margin: 0; height: 100%; background: #14161f; overflow: hidden;
     font-family: "Segoe UI", Arial, sans-serif; }
@@ -31,6 +31,7 @@ addEventListener('resize', resize);
 resize();
 const GRAVITY = 900;          // partículas
 const FALL_MUL = 0.6;         // na descida a gravidade é menor (caixas caem mais devagar)
+const GRID = 30;               // tamanho da célula do quadriculado de fundo
 const BOX_GRAVITY = 280;      // caixas (menor = ficam mais tempo no ar)
 const GUN = { x: 70, y: 270 };
 
@@ -151,6 +152,7 @@ function floatText(x, y, text, color) {
   floaters.push({ x, y, text, color, life: 1 });
 }
 
+let bgHue = 228;               // matiz do fundo: muda conforme a pontuação
 let flash = 0, flashRot = 0;
 const FLASH_TIME = 0.08;
 function muzzlePos() {
@@ -206,6 +208,7 @@ function update(dt) {
   aim = Math.atan2(mouse.y - gunY(), mouse.x - GUN.x);
   aim = Math.max(-1.35, Math.min(1.35, aim));
   shootCd -= dt;
+  bgHue += (228 + score * 0.6 - bgHue) * Math.min(1, 3 * dt);   // transição suave
   if (held) shoot();
   shake = Math.max(0, shake - 30 * dt);
 
@@ -330,7 +333,7 @@ function drawBox(bx) {
 }
 
 const gunImg = new Image();
-gunImg.src = 'pistola.png';     // imagem original já aponta para a direita
+gunImg.src = 'images/pistola.png';     // imagem original já aponta para a direita
 const IMG_K = 0.07, IMG_PIVOT = { x: 300, y: 200 };   // escala e ponto de giro (coords da imagem)
 const MUZZLE_X = 134 * IMG_K + 62, MUZZLE_Y = 10 * IMG_K;   // ponta do cano em relação ao ponto de giro
 let recoil = 0;
@@ -410,8 +413,14 @@ function draw() {
   if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
   // fundo
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#232a45'); g.addColorStop(1, '#10131f');
+  g.addColorStop(0, 'hsl(' + bgHue + ',32%,20%)'); g.addColorStop(1, 'hsl(' + bgHue + ',32%,10%)');
   ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+  // quadriculado translúcido
+  ctx.strokeStyle = 'rgba(159,176,255,0.10)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = 0; x <= W; x += GRID) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, H); }
+  for (let y = 0; y <= H; y += GRID) { ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); }
+  ctx.stroke();
   ctx.fillStyle = '#2b3150'; ctx.fillRect(0, H - 14, W, 14);
 
   // linha de mira
@@ -527,7 +536,7 @@ function buttons() {
       { label: T().menu, act: toMenu },
     ],
   }[state] || [];
-  const top = { menu: 280, help: 450, settings: 170, pause: 250, over: 340 }[state];
+  const top = { menu: 305, help: 450, settings: 170, pause: 250, over: 340 }[state];
   list.forEach((b, i) => { b.x = (W - BTN_W) / 2; b.y = top + i * 68; });
   return list;
 }
@@ -537,13 +546,65 @@ function hoverBtn() {
   return buttons().find(b => mouse.x >= b.x && mouse.x <= b.x + BTN_W && mouse.y >= b.y && mouse.y <= b.y + BTN_H);
 }
 
+// ---------- cartões de recorde / carteira ----------
+function drawTrophy(x, y, k, color) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
+  ctx.fillStyle = color; ctx.strokeStyle = '#7a5a00'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.arc(-11, -5, 6, Math.PI * 0.5, Math.PI * 1.5); ctx.stroke();
+  ctx.beginPath(); ctx.arc(11, -5, 6, -Math.PI * 0.5, Math.PI * 0.5); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-10, -14); ctx.lineTo(10, -14); ctx.lineTo(8, 0);
+  ctx.quadraticCurveTo(0, 8, -8, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillRect(-2, 3, 4, 7); ctx.fillRect(-7, 10, 14, 4); ctx.strokeRect(-7, 10, 14, 4);
+  ctx.fillStyle = '#fff8'; ctx.fillRect(-6, -12, 3, 9);
+  ctx.restore();
+}
+function drawCoin(x, y, k, color) {
+  const w = 0.25 + 0.75 * Math.abs(Math.cos(performance.now() / 500));   // moeda girando
+  ctx.save(); ctx.translate(x, y); ctx.scale(k * w, k);
+  ctx.fillStyle = color; ctx.strokeStyle = '#a77b00'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(0, 0, 14, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#ffffff90'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, 10, 0, 7); ctx.stroke();
+  ctx.fillStyle = '#8a6200'; ctx.font = 'bold 17px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('¢', 0, 1);
+  ctx.restore();
+}
+function drawStat(cx, y, kind, label, value, color, sub) {
+  const w = 210, h = 52, x = cx - w / 2, t = performance.now() / 1000;
+  ctx.save();
+  ctx.shadowColor = color; ctx.shadowBlur = 14 + Math.sin(t * 3) * 6;
+  const g = ctx.createLinearGradient(x, y, x, y + h);
+  g.addColorStop(0, '#3b4170'); g.addColorStop(1, '#1b1f3d');
+  ctx.fillStyle = g; ctx.strokeStyle = color; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  const bob = Math.sin(t * 3) * 1.5;
+  if (kind === 'trophy') drawTrophy(x + 29, y + h / 2 + bob, 1, color);
+  else drawCoin(x + 29, y + h / 2 + bob, 1, color);
+  text(label.toUpperCase(), x + 56, y + 14, 12, color, 'left');
+  if (sub) text(sub, x + w - 10, y + 14, 12, color, 'right');
+  let size = 24;
+  ctx.font = 'bold ' + size + 'px "Segoe UI", sans-serif';
+  const room = w - 56 - 10, mw = ctx.measureText(value).width;
+  if (mw > room) size = Math.floor(size * room / mw);
+  text(value, x + 56, y + h / 2+ 9, size, '#fff', 'left');
+}
+function drawStats(y, sub) {
+  drawStat(W / 2 - 115, y, 'trophy', T().best, String(best), '#ffd76a', sub && sub.best);
+  drawStat(W / 2 + 115, y, 'coin', T().wallet, money(wallet), '#ffd23f', sub && sub.wallet);
+}
+
 function drawScreen() {
   ctx.fillStyle = state === 'menu' ? '#0006' : '#000b'; ctx.fillRect(0, 0, W, H);
   if (state === 'menu') {
     const bob = Math.sin(performance.now() / 500) * 5;
-    text('SHOOT', W / 2, 105 + bob, 78, '#ffd76a');
-    text('THE BOX', W / 2, 180 + bob, 78, '#fff');
-    text(T().best + ': ' + best + '   •   ' + T().wallet + ': ' + money(wallet), W / 2, 240, 22, '#9fb0ff');
+    const tg = ctx.createLinearGradient(0, 70 + bob, 0, 170 + bob);   // degradê azulado do título
+    tg.addColorStop(0, '#4d5992'); tg.addColorStop(1, '#1b1f3d');   // mesmo fundo do cartão de recorde
+    text('ABSAL', W / 2, 120 + bob, 100, tg);
+    const og = ctx.createLinearGradient(0, 70 + bob, 0, 170 + bob);
+    og.addColorStop(0, '#b4c8e6'); og.addColorStop(1, '#5578b8');
+    ctx.strokeStyle = og; ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.strokeText('ABSAL', W / 2, 120 + bob);   // contorno para destacar do fundo
+    drawStats(210);
   } else if (state === 'settings') {
     text(T().settings, W / 2, 80, 46, '#ffd76a');
   } else if (state === 'help') {
@@ -554,17 +615,19 @@ function drawScreen() {
     text(T().paused, W / 2, 160, 60, '#fff');
   } else if (state === 'over') {
     text(T().gameOver, W / 2, 130, 60, '#ff5d6c');
-    text(T().score + ': ' + score, W / 2, 205, 32);
-    text(score >= best && score > 0 ? T().newBest : T().best + ': ' + best, W / 2, 250, 24, '#ffd76a');
-    text(T().earned + ' ' + money(runCoins) + '  •  ' + T().wallet + ': ' + money(wallet), W / 2, 288, 22, '#ffd23f');
+    text(T().score + ': ' + score, W / 2, 185, 32);
+    drawStats(225, { best: score >= best && score > 0 ? T().newBest : '', wallet: '+' + money(runCoins) });
   }
   const hv = hoverBtn();
   for (const b of buttons()) {
     const on = b === hv;
-    ctx.fillStyle = on ? '#ffd76a' : '#2b3150';
-    ctx.strokeStyle = on ? '#fff' : '#5b6285'; ctx.lineWidth = 3;
+    const bg = ctx.createLinearGradient(0, b.y, 0, b.y + BTN_H);
+    if (on) { bg.addColorStop(0, '#a8dcf5'); bg.addColorStop(1, '#3f93e0'); }
+    else { bg.addColorStop(0, '#3b4170'); bg.addColorStop(1, '#1b1f3d'); }   // mesmo fundo do cartão de recorde
+    ctx.fillStyle = bg;
+    ctx.strokeStyle = on ? '#fff' : '#6f98d8'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.roundRect(b.x, b.y, BTN_W, BTN_H, 10); ctx.fill(); ctx.stroke();
-    text(b.label, b.x + BTN_W / 2, b.y + BTN_H / 2 + 1, 22, on ? '#1d2233' : '#fff');
+    text(b.label, b.x + BTN_W / 2, b.y + BTN_H / 2 + 1, 22, on ? '#10204a' : '#fff');
   }
   cv.style.cursor = hv ? 'pointer' : 'default';
 }
