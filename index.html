@@ -39,7 +39,7 @@ function setSide(v) { side = v; try { localStorage.setItem('stb_side', v < 0 ? '
 // loja: o que o jogador já comprou e qual arma está equipada
 const ITEMS = [   // price em moedas da carteira; minBest = recorde mínimo para poder comprar
   { id: 'pistol', price: 0, minBest: 0 },
-  { id: 'revolver', price: 10550, minBest: 1000 },
+  { id: 'revolver', price: 4880, minBest: 1000 },
 ];
 let owned = ['pistol'], equipped = 'pistol';
 try {
@@ -1038,7 +1038,7 @@ function draw() {
   }
 
   if (state !== 'play') drawScreen();
-  text('v0.3.1 Beta', 14, 16, 13, 'rgba(255,255,255,0.55)', 'left');   // versão
+  text('v0.3.3 Beta', 14, 16, 13, 'rgba(255,255,255,0.55)', 'left');   // versão
   if (intro > 0) drawMiniIntro();
   if (boom > 0) {   // clarão da explosão por cima de tudo
     ctx.fillStyle = 'rgba(' + boomRGB + ',' + (0.55 * boom) + ')'; ctx.fillRect(-240, -240, W + 480, H + 480);
