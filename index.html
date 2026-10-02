@@ -58,7 +58,7 @@ const STR = {
     play: 'JOGAR', howto: 'COMO JOGAR', settings: 'CONFIGURAÇÕES', sound: 'SOM', on: 'LIGADO', off: 'DESLIGADO', lang: 'IDIOMA', langName: 'PORTUGUÊS',
     back: 'VOLTAR', resume: 'CONTINUAR', menu: 'MENU PRINCIPAL', again: 'JOGAR DE NOVO',
     best: 'Recorde', wallet: 'Carteira', paused: 'PAUSADO', gameOver: 'FIM DE JOGO', newBest: 'Novo recorde!',
-    zap: 'RAIO!', score: 'Pontos', points: 'PONTOS', earned: 'Ganhou', level: 'Nível', coins: 'Moedas', combo: 'Combo', bullet: '+1 bala',
+    miniTitle: 'MINIGUN!', miniAmmo: '100 BALAS', miniName: 'MINIGUN', miniOff: 'MINIGUN ESGOTADA', zap: 'RAIO!', score: 'Pontos', points: 'PONTOS', earned: 'Ganhou', level: 'Nível', coins: 'Moedas', combo: 'Combo', bullet: '+1 bala',
     help: [
       ['Mire com o mouse. Clique ou ESPAÇO para atirar.', '#fff'],
       ['Caixa de madeira = 10 centavos, caixa de ouro = 60 centavos.', '#ffd23f'],
@@ -68,6 +68,7 @@ const STR = {
       ['Bomba (!): NÃO atire! Acertar custa um ♥.', '#ff7b7b'],
       ['Você tem 10 balas. Acertar uma caixa devolve 1 bala; errar, não. Sem balas = fim de jogo.', '#cfd6ff'],
       ['Acertos seguidos criam combo e multiplicam os pontos.', '#cfd6ff'],
+      ['Combo 15 libera a MINIGUN: 100 balas, sem recarga! Depois 30, 60, 120...', '#ffd76a'],
       ['ESC ou P pausa o jogo.', '#9fffb0'],
     ],
   },
@@ -75,7 +76,7 @@ const STR = {
     play: 'PLAY', howto: 'HOW TO PLAY', settings: 'SETTINGS', sound: 'SOUND', on: 'ON', off: 'OFF', lang: 'LANGUAGE', langName: 'ENGLISH',
     back: 'BACK', resume: 'RESUME', menu: 'MAIN MENU', again: 'PLAY AGAIN',
     best: 'Best', wallet: 'Wallet', paused: 'PAUSED', gameOver: 'GAME OVER', newBest: 'New best!',
-    zap: 'ZAP!', score: 'Score', points: 'POINTS', earned: 'Earned', level: 'Level', coins: 'Coins', combo: 'Combo', bullet: '+1 bullet',
+    miniTitle: 'MINIGUN!', miniAmmo: '100 BULLETS', miniName: 'MINIGUN', miniOff: 'MINIGUN EMPTY', zap: 'ZAP!', score: 'Score', points: 'POINTS', earned: 'Earned', level: 'Level', coins: 'Coins', combo: 'Combo', bullet: '+1 bullet',
     help: [
       ['Aim with the mouse. Click or press SPACE to shoot.', '#fff'],
       ['Wooden box = 10 cents, golden box = 60 cents.', '#ffd23f'],
@@ -85,6 +86,7 @@ const STR = {
       ['Bomb (!): DO NOT shoot! Hitting it costs a ♥.', '#ff7b7b'],
       ['You have 10 bullets. Hitting a box gives 1 back; a miss does not. No bullets = game over.', '#cfd6ff'],
       ['Consecutive hits build a combo and multiply your points.', '#cfd6ff'],
+      ['Combo 15 unlocks the MINIGUN: 100 bullets, no reload! Then 30, 60, 120...', '#ffd76a'],
       ['ESC or P pauses the game.', '#9fffb0'],
     ],
   },
@@ -126,6 +128,7 @@ function reset() {
   score = 0; shownScore = 0; lives = 5; level = 1; combo = 0; kills = 0;
   spawnTimer = 0.5; shootCd = 0; shake = 0; boom = 0;
   ammo = MAX_AMMO; runCoins = 0;
+  mini = 0; comboGoal = 15; intro = 0;
 }
 
 function spawnBox() {
@@ -156,6 +159,9 @@ function floatText(x, y, text, color) {
   floaters.push({ x, y, text, color, life: 1 });
 }
 
+let mini = 0, comboGoal = 15, intro = 0;   // balas da minigun, próximo combo-meta e tempo da cena de entrada
+const MINI_AMMO = 100, INTRO_TIME = 2.4;
+const smooth = x => x * x * (3 - 2 * x);
 let comboPop = 0;              // pulso do contador de combo a cada acerto seguido
 let shownScore = 0;            // pontuação exibida: sobe de 1 em 1 até alcançar a real
 let bgHue = 228;               // matiz do fundo: muda conforme a pontuação
@@ -164,13 +170,45 @@ let flash = 0, flashRot = 0;
 const FLASH_TIME = 0.08;
 function muzzlePos() {
   return {
-    x: GUN.x + Math.cos(aim) * MUZZLE_X + MUZZLE_Y * Math.sin(aim),
-    y: gunY() + Math.sin(aim) * MUZZLE_X - MUZZLE_Y * Math.cos(aim),
+    x: GUN.x + Math.cos(aim) * muzzleLen() + MUZZLE_Y * Math.sin(aim),
+    y: gunY() + Math.sin(aim) * muzzleLen() - MUZZLE_Y * Math.cos(aim),
   };
 }
 
+// minigun: rajada rápida, leve dispersão, sem recarga; acabou, volta à pistola
+function shootMini() {
+  mini--;
+  shootCd = 0.05;
+  const a = aim + (Math.random() - 0.5) * 0.07;
+  const { x: mx, y: my } = muzzlePos();
+  recoil = 7;
+  bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(a) * 3200, vy: Math.sin(a) * 3200 });
+  flash = FLASH_TIME; flashRot = Math.random() * 6;
+  for (let i = 0; i < 4; i++) {
+    const b = aim + (Math.random() - 0.5) * 0.6, sp = 400 + Math.random() * 600, l = 0.1 + Math.random() * 0.15;
+    parts.push({ kind: 'spark', x: mx, y: my, vx: Math.cos(b) * sp, vy: Math.sin(b) * sp,
+      life: l, max: l, size: 2 + Math.random() * 2, color: Math.random() < 0.5 ? '#fff3b0' : '#ffb347', rot: 0, vr: 0 });
+  }
+  if (Math.random() < 0.4) parts.push({ x: GUN.x, y: gunY() - 6, vx: -80 - Math.random() * 80, vy: -240 - Math.random() * 100,
+    life: 0.8, max: 0.8, size: 4, color: '#e0b84a', rot: 0, vr: 14 });
+  beep(160 + Math.random() * 60, 0.05, 'sawtooth', 0.035, -60);
+  shake = Math.max(shake, 2.5);
+  if (mini <= 0) {
+    floatText(GUN.x + 110, gunY() - 60, T().miniOff, '#ff9f43');
+    beep(120, 0.3, 'square', 0.06, -60);
+  }
+}
+// combo-meta alcançada: a tela se afasta e a minigun aparece
+function grantMinigun() {
+  mini = MINI_AMMO; comboGoal *= 2; intro = INTRO_TIME; held = false; shootCd = 0.3;
+  shake = Math.max(shake, 8);
+  [440, 554, 659, 880, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.07), i * 110));
+  setTimeout(() => beep(70, 0.9, 'sawtooth', 0.1, -20), 300);
+}
+
 function shoot() {
-  if (state !== 'play' || shootCd > 0) return;
+  if (state !== 'play' || shootCd > 0 || intro > 0) return;
+  if (mini > 0) { shootMini(); return; }
   if (ammo <= 0) { shootCd = 0.25; beep(90, 0.06, 'square', 0.04); return; }
   ammo--;
   shootCd = 0.16;
@@ -215,6 +253,8 @@ function update(dt) {
   aim = Math.atan2(mouse.y - gunY(), mouse.x - GUN.x);
   aim = Math.max(-1.35, Math.min(1.35, aim));
   shootCd -= dt;
+  const gdt = intro > 0 ? 0 : dt;   // durante a cena da minigun o jogo fica parado
+  if (intro > 0) intro = Math.max(0, intro - dt);
   const gap = score - shownScore;
   if (gap > 0) shownScore = Math.min(score, shownScore + Math.max(12, gap * 4) * dt);   // longe = rápido, perto = devagar
   else shownScore = score;
@@ -224,7 +264,7 @@ function update(dt) {
 
   if (state === 'play') {
     level = 1 + Math.floor(kills / 10);
-    spawnTimer -= dt;
+    spawnTimer -= gdt;
     if (spawnTimer <= 0) {
       const n = Math.random() < Math.min(0.15 + level * 0.05, 0.45) ? 2 : 1;
       for (let i = 0; i < n; i++) spawnBox();
@@ -240,14 +280,14 @@ function update(dt) {
   // balas
   for (const b of bullets) {
     b.px = b.x; b.py = b.y;
-    b.x += b.vx * dt; b.y += b.vy * dt;
+    b.x += b.vx * gdt; b.y += b.vy * gdt;
   }
   bullets = bullets.filter(b => b.x > -20 && b.x < W + 20 && b.y > -20 && b.y < H + 20 && !b.dead);
 
   // caixas
   for (const bx of boxes) {
-    bx.vy += BOX_GRAVITY * (bx.vy > 0 ? FALL_MUL : 1) * dt;
-    bx.x += bx.vx * dt; bx.y += bx.vy * dt; bx.rot += bx.vr * dt;
+    bx.vy += BOX_GRAVITY * (bx.vy > 0 ? FALL_MUL : 1) * gdt;
+    bx.x += bx.vx * gdt; bx.y += bx.vy * gdt; bx.rot += bx.vr * gdt;
     if (bx.x - bx.size * 0.7 < SAFE_X) { bx.x = SAFE_X + bx.size * 0.7; bx.vx = Math.abs(bx.vx); }   // quica na borda do espaço da arma
     if (bx.x + bx.size * 0.7 > W) { bx.x = W - bx.size * 0.7; bx.vx = -Math.abs(bx.vx); }   // quica na borda direita da tela
     if (bx.vy < 0) bx.up = true;
@@ -255,6 +295,8 @@ function update(dt) {
     for (const b of bullets) {
       if (b.dead || bx.hit) continue;
       if (segDist(b.px, b.py, b.x, b.y, bx.x, bx.y) < bx.size * 0.72) {
+        const sp = Math.hypot(b.vx, b.vy) || 1;
+        bx.hx = b.vx / sp; bx.hy = b.vy / sp;   // direção do impacto (os pedaços voam para lá)
         b.dead = true; bx.hit = true; hitBox(bx);
         parts.push({ kind: 'ring', x: bx.x, y: bx.y, vx: 0, vy: 0, life: 0.25, max: 0.25, size: 8,
           color: bx.type === 'bomb' ? '#ff8a5c' : '#fff3b0', rot: 0, vr: 0 });
@@ -266,7 +308,7 @@ function update(dt) {
     }
   }
   boxes = boxes.filter(b => !b.hit);
-  if (state === 'play' && ammo <= 0 && bullets.every(b => b.dead)) endGame();
+  if (state === 'play' && ammo <= 0 && mini <= 0 && bullets.every(b => b.dead)) endGame();
 
   flash = Math.max(0, flash - dt);
   boom = Math.max(0, boom - 2.2 * dt);
@@ -345,8 +387,48 @@ function zapAll(src) {
   for (let i = 0; i < 4; i++) setTimeout(() => beep(600 + Math.random() * 1200, 0.07, 'sawtooth', 0.04, -400), 40 + i * 55);
 }
 
+// caixa estilhaça em pedaços da própria textura + lascas, poeira e brilho
+function shatter(bx) {
+  const img = boxImgs[bx.type], c = BOX_CROPS[bx.type], N = 3, ps = bx.size / N;
+  const dx = bx.hx || 0, dy = bx.hy || 0, cs = Math.cos(bx.rot), sn = Math.sin(bx.rot);
+  const gold = bx.type === 'gold', bolt = bx.type === 'bolt';
+  if (img && img.complete && img.naturalWidth && c) {
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const ox = (i + 0.5 - N / 2) * ps, oy = (j + 0.5 - N / 2) * ps;
+      const rx = ox * cs - oy * sn, ry = ox * sn + oy * cs;    // posição do pedaço na caixa girada
+      const l = 0.9 + Math.random() * 0.6;
+      parts.push({ kind: 'shard', img, sx: c.x + i * c.w / N, sy: c.y + j * c.h / N, sw: c.w / N, sh: c.h / N,
+        x: bx.x + rx, y: bx.y + ry, vx: rx * 7 + dx * 260 + (Math.random() - 0.5) * 140,
+        vy: ry * 7 + dy * 260 - 120 + (Math.random() - 0.5) * 140,
+        life: l, max: l, size: ps * 1.04, color: '#fff', rot: bx.rot, vr: (Math.random() - 0.5) * 14 });
+    }
+  }
+  // clarão do impacto
+  parts.push({ kind: 'fire', x: bx.x, y: bx.y, vx: 0, vy: 0, life: 0.14, max: 0.14, size: bx.size * 0.9, color: '#ffffff', rot: 0, vr: 0 });
+  // lascas / faíscas
+  const col = gold ? ['#fff3b0', '#ffd23f'] : bolt ? ['#7fd0ff', '#ffffff'] : ['#e3b27a', '#a8703a'];
+  for (let i = 0; i < (gold || bolt ? 16 : 12); i++) {
+    const a = Math.atan2(dy, dx) + (Math.random() - 0.5) * 2.4, sp = 200 + Math.random() * 520, l = 0.25 + Math.random() * 0.3;
+    parts.push({ kind: 'spark', x: bx.x, y: bx.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: l, max: l,
+      size: 2 + Math.random() * 2.5, color: col[i % 2], rot: 0, vr: 0 });
+  }
+  // poeira
+  for (let i = 0; i < 6; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 30 + Math.random() * 120, l = 0.5 + Math.random() * 0.4;
+    parts.push({ kind: 'smoke', x: bx.x, y: bx.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 20, life: l, max: l,
+      size: 8 + Math.random() * 8, color: gold ? '#ffe9a0' : bolt ? '#9fc8ff' : '#d9c7a3', rot: 0, vr: 0 });
+  }
+  // moedinhas douradas voando
+  if (gold) for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 2, sp = 200 + Math.random() * 300;
+    parts.push({ x: bx.x, y: bx.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, max: 1, size: 7,
+      color: '#ffd23f', rot: 0, vr: 10 });
+  }
+  shake = Math.max(shake, gold ? 6 : 4);
+}
+
 function hitBox(bx) {
-  if (ammo < MAX_AMMO) ammo++;     // acertou qualquer caixa: recupera 1 bala
+  if (ammo < MAX_AMMO && mini <= 0) ammo++;     // acertou qualquer caixa: recupera 1 bala
   if (bx.type === 'bomb') {
     combo = 0;
     explode(bx.x, bx.y);
@@ -361,18 +443,21 @@ function hitBox(bx) {
   floatText(bx.x, bx.y + 22, '+' + coins + '¢', '#ffd23f');
   const pts = base * (1 + Math.floor(combo / 3));
   score += pts;
-  burst(bx.x, bx.y, bx.type === 'gold' ? '#ffd23f' : '#c98a4b', 18);
+  shatter(bx);
   floatText(bx.x, bx.y, '+' + pts + (combo >= 3 ? '  x' + (1 + Math.floor(combo / 3)) : ''), '#fff');
   beep(520 + Math.min(combo, 12) * 40, 0.12, 'triangle', 0.08);
   if (bx.type === 'gold') {
-    ammo = Math.min(ammo + 1, BONUS_CAP);
-    floatText(bx.x, bx.y + 44, T().bullet, '#ffd76a');
+    if (mini <= 0) {
+      ammo = Math.min(ammo + 1, BONUS_CAP);
+      floatText(bx.x, bx.y + 44, T().bullet, '#ffd76a');
+    }
   }
   if (bx.type === 'gold' && lives < 7 && Math.random() < 0.5) {
     lives++; floatText(bx.x, bx.y - 22, '+1 ♥', '#6dff9a');
   }
   shake = Math.max(shake, 4);
   if (bx.type === 'bolt') zapAll(bx);
+  if (mini <= 0 && intro <= 0 && combo >= comboGoal) grantMinigun();
 }
 
 function segDist(x1, y1, x2, y2, px, py) {
@@ -390,8 +475,8 @@ boxImgs.bolt.src = 'images/caixa de raio.png';
 boxImgs.bomb.src = 'images/bomba.png';
 const BOMB_CROP = { x: 398, y: 310, w: 1080, h: 1355 }, BOMB_CENTER = { x: 925, y: 1150 }, BOMB_BODY = 1050;   // recorte, centro e diâmetro do corpo da bomba (coords da imagem)
 const BOX_CROPS = {   // área útil de cada imagem (sem a margem transparente)
-  normal: { x: 280, y: 282, w: 1360, h: 1306 },
-  gold: { x: 245, y: 244, w: 1429, h: 1425 },
+  normal: { x: 231, y: 263, w: 1453, h: 1401 },
+  gold: { x: 218, y: 236, w: 1481, h: 1430 },
   bolt: { x: 233, y: 265, w: 1450, h: 1397 },
 };
 // brilho elétrico pulsando atrás da caixa de raio
@@ -492,7 +577,11 @@ function drawBox(bx) {
 const gunImg = new Image();
 gunImg.src = 'images/pistola.png';     // a imagem aponta para a esquerda: é espelhada ao desenhar
 const IMG_K = 0.17, IMG_PIVOT = { x: 1046, y: 240 };   // escala e ponto de giro (coords da imagem original)
-const MUZZLE_X = (1046 - 235) * IMG_K, MUZZLE_Y = 0;   // ponta do cano em relação ao ponto de giro
+const MUZZLE_X = (1046 - 235) * IMG_K, MUZZLE_Y = 0;
+const miniImg = new Image();
+miniImg.src = 'images/minigun.png';   // aponta para a esquerda: é espelhada ao desenhar
+const MINI_K = 0.085, MINI_PIVOT = { x: 1728, y: 737 }, MINI_MUZZLE_X = (1728 - 64) * MINI_K;
+function muzzleLen() { return mini > 0 && intro <= 0 ? MINI_MUZZLE_X : MUZZLE_X; }   // ponta do cano em relação ao ponto de giro
 let recoil = 0;
 function gunY() { return GUN.y + Math.sin(performance.now() / 400) * 8; }
 
@@ -501,6 +590,14 @@ function drawGun() {
   ctx.save();
   ctx.translate(GUN.x, gy); ctx.rotate(aim);
   ctx.translate(-recoil, 0);
+  if (mini > 0 && intro <= 0 && miniImg.complete && miniImg.naturalWidth) {
+    if (held && shootCd > 0) ctx.translate((Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 2.5);   // vibra ao disparar
+    ctx.scale(-MINI_K, MINI_K);   // espelha na horizontal
+    ctx.drawImage(miniImg, -MINI_PIVOT.x, -MINI_PIVOT.y);
+    ctx.restore();
+    recoil = Math.max(0, recoil - 80 * (1 / 60));
+    return;
+  }
   if (gunImg.complete && gunImg.naturalWidth) {
     ctx.scale(-IMG_K, IMG_K);   // espelha na horizontal
     ctx.drawImage(gunImg, -IMG_PIVOT.x, -IMG_PIVOT.y);
@@ -560,25 +657,61 @@ function text(t, x, y, size, color = '#fff', align = 'center') {
   ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillText(t, x, y);
 }
 
+// cena de entrada da minigun: escurece, raios de luz e a arma subindo ao centro
+function drawMiniIntro() {
+  const e = smooth(Math.min(1, (INTRO_TIME - intro) / 0.5)) * smooth(Math.min(1, intro / 0.5)), t = performance.now() / 1000;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,' + (0.5 * e) + ')'; ctx.fillRect(-240, -240, W + 480, H + 480);
+  ctx.translate(W / 2, H / 2 - 10);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.3 * e; ctx.rotate(t * 0.6); ctx.fillStyle = '#ffd76a';
+  for (let i = 0; i < 12; i++) {
+    ctx.rotate(Math.PI / 6);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(440, -26); ctx.lineTo(440, 26); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const gl = ctx.createRadialGradient(0, 0, 20, 0, 0, 260 + Math.sin(t * 6) * 14);
+  gl.addColorStop(0, 'rgba(255,215,90,' + (0.6 * e) + ')'); gl.addColorStop(1, 'rgba(255,170,30,0)');
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(0, 0, 280, 0, 7); ctx.fill();
+  ctx.restore();
+  if (miniImg.complete && miniImg.naturalWidth) {
+    ctx.save();
+    ctx.translate(0, (1 - e) * 70 + Math.sin(t * 3) * 4);
+    const k = (400 / 2184) * (0.6 + 0.4 * e);
+    ctx.globalAlpha = e; ctx.scale(-k, k);
+    ctx.drawImage(miniImg, -1156, -732);   // centro da área útil da imagem
+    ctx.restore();
+  }
+  ctx.globalAlpha = e;
+  text(T().miniTitle, 0, -150, 70, '#ffd76a');
+  text(T().miniAmmo, 0, 150, 34, '#fff');
+  ctx.restore();
+}
 function draw() {
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ctx.save();
   if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  if (intro > 0) {   // a tela se afasta e volta
+    const z = 1 - 0.2 * smooth(Math.min(1, (INTRO_TIME - intro) / 0.45)) * smooth(Math.min(1, intro / 0.45));
+    ctx.translate(W / 2, H / 2); ctx.scale(z, z); ctx.translate(-W / 2, -H / 2);
+  }
   // fundo
   const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, 'hsl(' + bgHue + ',32%,20%)'); g.addColorStop(1, 'hsl(' + bgHue + ',32%,10%)');
-  ctx.fillStyle = g; ctx.fillRect(-40, -40, W + 80, H + 80);
+  ctx.fillStyle = g; ctx.fillRect(-240, -240, W + 480, H + 480);
   // quadriculado translúcido
   ctx.strokeStyle = 'rgba(159,176,255,0.10)'; ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let x = 0; x <= W; x += GRID) { ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, H); }
-  for (let y = 0; y <= H; y += GRID) { ctx.moveTo(0, y + 0.5); ctx.lineTo(W, y + 0.5); }
+  for (let x = -GRID * 8; x <= W + GRID * 8; x += GRID) { ctx.moveTo(x + 0.5, -240); ctx.lineTo(x + 0.5, H + 240); }
+  for (let y = -GRID * 8; y <= H + GRID * 8; y += GRID) { ctx.moveTo(-240, y + 0.5); ctx.lineTo(W + 240, y + 0.5); }
   ctx.stroke();
 
   // linha de mira
   if (state === 'play') {
     ctx.setLineDash([6, 10]); ctx.strokeStyle = '#ffffff30'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(GUN.x + Math.cos(aim) * (MUZZLE_X + 8), gunY() + Math.sin(aim) * (MUZZLE_X + 8));
+    ctx.beginPath(); ctx.moveTo(GUN.x + Math.cos(aim) * (muzzleLen() + 8), gunY() + Math.sin(aim) * (muzzleLen() + 8));
     ctx.lineTo(GUN.x + Math.cos(aim) * 1400, gunY() + Math.sin(aim) * 1400); ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -635,6 +768,12 @@ function draw() {
       ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 7); ctx.stroke();
       ctx.globalAlpha = 1; continue;
     }
+    if (p.kind === 'shard') {
+      ctx.save(); ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.4));
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      ctx.drawImage(p.img, p.sx, p.sy, p.sw, p.sh, -p.size / 2, -p.size / 2, p.size, p.size);
+      ctx.restore(); continue;
+    }
     if (p.kind === 'bolt') {
       const a = Math.max(0, p.life / p.max);
       ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -673,9 +812,18 @@ function draw() {
     text(T().level + ' ' + level, W / 2, 28, 20, '#9fb0ff');
     text(T().coins + ': ' + money(runCoins), W - 20, 62, 20, '#ffd23f', 'right');
     text('♥'.repeat(Math.max(lives, 0)), W - 20, 28, 26, '#ff5d6c', 'right');
-    for (let i = 0; i < Math.max(MAX_AMMO, ammo); i++) {
-      ctx.fillStyle = i < ammo ? (i >= MAX_AMMO ? '#6dff9a' : '#ffd76a') : '#ffffff22';
-      ctx.fillRect(20 + i * 14, H - 44, 8, 22);
+    if (mini > 0) {   // barra de balas da minigun
+      const f = mini / MINI_AMMO;
+      ctx.fillStyle = '#ffffff22'; ctx.fillRect(20, H - 44, 220, 22);
+      ctx.fillStyle = f > 0.3 ? '#ffd76a' : '#ff6b4d'; ctx.fillRect(20, H - 44, 220 * f, 22);
+      ctx.strokeStyle = '#ffffffaa'; ctx.lineWidth = 2; ctx.strokeRect(20, H - 44, 220, 22);
+      text(T().miniName + '  ' + mini, 130, H - 32, 16, f > 0.3 ? '#1d2233' : '#fff');
+    } else {
+      for (let i = 0; i < Math.max(MAX_AMMO, ammo); i++) {
+        ctx.fillStyle = i < ammo ? (i >= MAX_AMMO ? '#6dff9a' : '#ffd76a') : '#ffffff22';
+        ctx.fillRect(20 + i * 14, H - 44, 8, 22);
+      }
+      if (state === 'play') text(T().miniName + ': ' + Math.min(combo, comboGoal) + '/' + comboGoal + ' combo', W - 20, H - 24, 16, '#9fb0ff', 'right');
     }
     if (combo >= 2) {   // aparece a cada acerto seguido, com um "pulo" a cada +1
       ctx.save(); ctx.translate(20, 78); ctx.scale(1 + 0.45 * comboPop, 1 + 0.45 * comboPop);
@@ -687,8 +835,9 @@ function draw() {
   }
 
   if (state !== 'play') drawScreen();
+  if (intro > 0) drawMiniIntro();
   if (boom > 0) {   // clarão da explosão por cima de tudo
-    ctx.fillStyle = 'rgba(' + boomRGB + ',' + (0.55 * boom) + ')'; ctx.fillRect(-40, -40, W + 80, H + 80);
+    ctx.fillStyle = 'rgba(' + boomRGB + ',' + (0.55 * boom) + ')'; ctx.fillRect(-240, -240, W + 480, H + 480);
   }
   ctx.restore();
 }
@@ -791,7 +940,7 @@ function drawScreen() {
   } else if (state === 'help') {
     text(T().howto, W / 2, 60, 46, '#ffd76a');
     const L = T().help;
-    L.forEach((l, i) => text(l[0], W / 2, 120 + i * 36, 21, l[1]));
+    L.forEach((l, i) => text(l[0], W / 2, 108 + i * 33, 21, l[1]));
   } else if (state === 'pause') {
     text(T().paused, W / 2, 160, 60, '#fff');
   } else if (state === 'over') {
