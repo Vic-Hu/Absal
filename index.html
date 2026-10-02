@@ -39,7 +39,7 @@ function setSide(v) { side = v; try { localStorage.setItem('stb_side', v < 0 ? '
 // loja: o que o jogador já comprou e qual arma está equipada
 const ITEMS = [   // price em moedas da carteira; minBest = recorde mínimo para poder comprar
   { id: 'pistol', price: 0, minBest: 0 },
-  { id: 'revolver', price: 4880, minBest: 1000 },
+  { id: 'revolver', price: 5940, minBest: 1000 },
 ];
 let owned = ['pistol'], equipped = 'pistol';
 try {
@@ -282,7 +282,7 @@ function shootMini() {
   const a = aim + (Math.random() - 0.5) * 0.07;
   const { x: mx, y: my } = muzzlePos();
   recoil = 7;
-  bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(a) * 3200, vy: Math.sin(a) * 3200 });
+  bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(a) * 3200, vy: Math.sin(a) * 3200, pierce: 1 });
   flash = FLASH_TIME; flashRot = Math.random() * 6;
   for (let i = 0; i < 4; i++) {
     const b = aim + (Math.random() - 0.5) * 0.6, sp = 400 + Math.random() * 600, l = 0.1 + Math.random() * 0.15;
@@ -315,7 +315,8 @@ function shoot() {
   if (equipped === 'revolver') { spin = SPIN_TIME; shootCd = SPIN_TIME; sfxSpin(); }   // cambalhota: o próximo tiro espera ela terminar
   const { x: mx, y: my } = muzzlePos();
   recoil = 12;
-  bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(aim) * 3000, vy: Math.sin(aim) * 3000 });
+  bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(aim) * 3000, vy: Math.sin(aim) * 3000,
+    pierce: equipped === 'revolver' ? 2 : 1 });   // bala do revólver atravessa a 1ª caixa e morre na 2ª
 
   // clarão + faíscas em cone + fumaça + cápsula ejetada
   flash = FLASH_TIME; flashRot = Math.random() * 6;
@@ -399,7 +400,8 @@ function update(dt) {
       if (segDist(b.px, b.py, b.x, b.y, bx.x, bx.y) < bx.size * 0.72) {
         const sp = Math.hypot(b.vx, b.vy) || 1;
         bx.hx = b.vx / sp; bx.hy = b.vy / sp;   // direção do impacto (os pedaços voam para lá)
-        b.dead = true; bx.hit = true; hitBox(bx);
+        if (--b.pierce <= 0) b.dead = true;
+        bx.hit = true; hitBox(bx);
         parts.push({ kind: 'ring', x: bx.x, y: bx.y, vx: 0, vy: 0, life: 0.25, max: 0.25, size: 8,
           color: bx.type === 'bomb' ? '#ff8a5c' : '#fff3b0', rot: 0, vr: 0 });
       }
@@ -957,16 +959,18 @@ function draw() {
     g.addColorStop(0, 'rgba(255,120,30,0)');
     g.addColorStop(0.6, 'rgba(255,190,70,0.55)');
     g.addColorStop(1, 'rgba(255,255,230,1)');
-    ctx.strokeStyle = g; ctx.lineWidth = 7; ctx.globalAlpha = 0.35;
+    const hv = b.pierce > 1 || b.heavy;   // bala do revólver: rastro mais grosso e cabeça maior
+    if (b.pierce > 1) b.heavy = true;
+    ctx.strokeStyle = g; ctx.lineWidth = hv ? 10 : 7; ctx.globalAlpha = 0.35;
     ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();      // brilho externo
-    ctx.lineWidth = 3; ctx.globalAlpha = 1;
+    ctx.lineWidth = hv ? 4.5 : 3; ctx.globalAlpha = 1;
     ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();      // núcleo
     // cabeça brilhante
-    const hg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 11);
+    const hr = hv ? 15 : 11, hg = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, hr);
     hg.addColorStop(0, 'rgba(255,255,255,1)');
     hg.addColorStop(0.4, 'rgba(255,220,120,0.6)');
     hg.addColorStop(1, 'rgba(255,160,40,0)');
-    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(b.x, b.y, 11, 0, 7); ctx.fill();
+    ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(b.x, b.y, hr, 0, 7); ctx.fill();
   }
   ctx.restore();
   for (const p of parts) {
