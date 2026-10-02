@@ -36,10 +36,23 @@ const BOX_GRAVITY = 280;      // caixas (menor = ficam mais tempo no ar)
 let side = 1;                  // 1 = arma à esquerda, -1 = arma à direita
 try { if (localStorage.getItem('stb_side') === 'R') side = -1; } catch (e) {}
 function setSide(v) { side = v; try { localStorage.setItem('stb_side', v < 0 ? 'R' : 'L'); } catch (e) {} }
+// loja: o que o jogador já comprou e qual arma está equipada
+const ITEMS = [   // price em moedas da carteira; minBest = recorde mínimo para poder comprar
+  { id: 'pistol', price: 0, minBest: 0 },
+  { id: 'revolver', price: 10550, minBest: 1000 },
+];
+let owned = ['pistol'], equipped = 'pistol';
+try {
+  const o = JSON.parse(localStorage.getItem('stb_owned') || '[]');
+  if (Array.isArray(o)) owned = ['pistol', ...o.filter(id => id !== 'pistol' && ITEMS.some(i => i.id === id))];
+  const e = localStorage.getItem('stb_gun');
+  if (e && owned.includes(e)) equipped = e;
+} catch (e) {}
+function saveShop() { try { localStorage.setItem('stb_owned', JSON.stringify(owned)); localStorage.setItem('stb_gun', equipped); } catch (e) {} }
 const GUN = { get x() { return side > 0 ? 110 : W - 110; }, y: 270 };
 const SAFE_X = 285;            // as caixas não entram à esquerda desta linha (espaço da arma)
 
-let state = 'menu';            // menu | help | settings | play | pause | over
+let state = 'menu';            // menu | help | settings | shop | play | pause | over
 let boxes, bullets, parts, floaters;
 let score, lives, level, combo, spawnTimer, shootCd, shake, best;
 let aim = 0, mouse = { x: 400, y: 270 }, held = false;
@@ -58,7 +71,7 @@ const money = c => lang === 'en' ? '$' + (c / 100).toFixed(2) : 'R$ ' + (c / 100
 // ---------- idiomas ----------
 const STR = {
   pt: {
-    play: 'JOGAR', howto: 'COMO JOGAR', settings: 'CONFIGURAÇÕES', sound: 'SOM', on: 'LIGADO', off: 'DESLIGADO', lang: 'IDIOMA', langName: 'PORTUGUÊS', side: 'LADO DA ARMA', left: 'ESQUERDA', right: 'DIREITA',
+    play: 'JOGAR', howto: 'COMO JOGAR', settings: 'CONFIGURAÇÕES', sound: 'SOM', on: 'LIGADO', off: 'DESLIGADO', shop: 'LOJA', equip: 'EQUIPAR', equipped: 'EQUIPADO', buy: 'COMPRAR', locked: 'BLOQUEADO', needBest: 'Recorde mínimo: ', noCoins: 'Moedas insuficientes', free: 'Inicial', pistolName: 'PISTOLA', revolverName: 'REVÓLVER', lang: 'IDIOMA', langName: 'PORTUGUÊS', side: 'LADO DA ARMA', left: 'ESQUERDA', right: 'DIREITA',
     back: 'VOLTAR', resume: 'CONTINUAR', menu: 'MENU PRINCIPAL', again: 'JOGAR DE NOVO',
     best: 'Recorde', wallet: 'Carteira', paused: 'PAUSADO', gameOver: 'FIM DE JOGO', newBest: 'Novo recorde!',
     miniTitle: 'MINIGUN!', miniAmmo: '100 BALAS', miniName: 'MINIGUN', miniOff: 'MINIGUN ESGOTADA', zap: 'RAIO!', score: 'Pontos', points: 'PONTOS', earned: 'Ganhou', level: 'Nível', coins: 'Moedas', combo: 'Combo', bullet: '+1 bala',
@@ -76,7 +89,7 @@ const STR = {
     ],
   },
   en: {
-    play: 'PLAY', howto: 'HOW TO PLAY', settings: 'SETTINGS', sound: 'SOUND', on: 'ON', off: 'OFF', lang: 'LANGUAGE', langName: 'ENGLISH', side: 'GUN SIDE', left: 'LEFT', right: 'RIGHT',
+    play: 'PLAY', howto: 'HOW TO PLAY', settings: 'SETTINGS', sound: 'SOUND', on: 'ON', off: 'OFF', shop: 'SHOP', equip: 'EQUIP', equipped: 'EQUIPPED', buy: 'BUY', locked: 'LOCKED', needBest: 'Minimum best: ', noCoins: 'Not enough coins', free: 'Starter', pistolName: 'PISTOL', revolverName: 'REVOLVER', lang: 'LANGUAGE', langName: 'ENGLISH', side: 'GUN SIDE', left: 'LEFT', right: 'RIGHT',
     back: 'BACK', resume: 'RESUME', menu: 'MAIN MENU', again: 'PLAY AGAIN',
     best: 'Best', wallet: 'Wallet', paused: 'PAUSED', gameOver: 'GAME OVER', newBest: 'New best!',
     miniTitle: 'MINIGUN!', miniAmmo: '100 BULLETS', miniName: 'MINIGUN', miniOff: 'MINIGUN EMPTY', zap: 'ZAP!', score: 'Score', points: 'POINTS', earned: 'Earned', level: 'Level', coins: 'Coins', combo: 'Combo', bullet: '+1 bullet',
@@ -110,19 +123,101 @@ function addCoins(c) {
 }
 
 // ---------- áudio ----------
-let actx;
-function beep(freq, dur, type = 'square', vol = 0.06, slide = 0) {
+let actx, master, reverb, noiseBuf;
+function audio() {   // contexto único: compressor no master + reverb curto para dar corpo aos disparos
+  if (actx) return actx;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createDynamicsCompressor();
+  master.threshold.value = -14; master.ratio.value = 6; master.attack.value = 0.002; master.release.value = 0.15;
+  master.connect(actx.destination);
+  const len = Math.floor(actx.sampleRate * 0.6), imp = actx.createBuffer(2, len, actx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = imp.getChannelData(c);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+  }
+  reverb = actx.createConvolver(); reverb.buffer = imp;
+  const wet = actx.createGain(); wet.gain.value = 0.6;
+  reverb.connect(wet); wet.connect(master);
+  noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  return actx;
+}
+function out(node, wet) {
+  node.connect(master);
+  if (wet) { const s = actx.createGain(); s.gain.value = wet; node.connect(s); s.connect(reverb); }
+}
+function beep(freq, dur, type = 'square', vol = 0.06, slide = 0, delay = 0, wet = 0) {
   if (!soundOn) return;
   try {
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    audio();
+    const t0 = actx.currentTime + delay;
     const o = actx.createOscillator(), g = actx.createGain();
-    o.type = type; o.frequency.value = freq;
-    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), actx.currentTime + dur);
-    g.gain.value = vol;
-    g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
-    o.connect(g); g.connect(actx.destination);
-    o.start(); o.stop(actx.currentTime + dur);
+    o.type = type; o.frequency.setValueAtTime(freq, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); out(g, wet);
+    o.start(t0); o.stop(t0 + dur + 0.02);
   } catch (e) {}
+}
+// rajada de ruído filtrado (estalo, estilhaço, fumaça de tiro)
+function noise(dur, vol, type = 'lowpass', f0 = 4000, f1 = f0, q = 0.8, delay = 0, wet = 0) {
+  if (!soundOn) return;
+  try {
+    audio();
+    const t0 = actx.currentTime + delay;
+    const src = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+    src.buffer = noiseBuf; src.loop = true;
+    f.type = type; f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t0);
+    if (f1 !== f0) f.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); out(g, wet);
+    src.start(t0, Math.random() * 0.5); src.stop(t0 + dur + 0.02);
+  } catch (e) {}
+}
+// pistola: transiente + estalo + corpo + sub-grave + eco de ambiente + cápsula caindo no chão
+function sfxShot() {
+  const v = 0.92 + Math.random() * 0.16;   // leve variação a cada tiro
+  noise(0.012, 0.32, 'highpass', 2500, 2500, 0.5);                                    // transiente: o "clique" do disparo
+  noise(0.09, 0.34, 'bandpass', 3800 * v, 900, 0.6, 0, 0.3);                          // estalo da pólvora
+  noise(0.22, 0.3, 'lowpass', 2600 * v, 180, 0.8, 0.004, 0.45);                       // corpo / estrondo
+  beep(420 * v, 0.07, 'sawtooth', 0.14, -330, 0.002);                                 // "latido" médio
+  beep(140 * v, 0.28, 'sine', 0.5, -105, 0, 0.25);                                    // soco grave
+  beep(62, 0.35, 'sine', 0.3, -28, 0.005);                                            // sub
+  noise(0.35, 0.09, 'lowpass', 1800, 250, 0.7, 0.05, 0.8);                            // reflexo do ambiente
+  noise(0.2, 0.05, 'lowpass', 1400, 200, 0.7, 0.11, 0.8);                             // segundo eco, mais fraco
+  const d = 0.3 + Math.random() * 0.12;                                               // cápsula quicando no chão
+  beep(4300 * v, 0.07, 'sine', 0.045, -600, d);
+  beep(5600 * v, 0.05, 'sine', 0.03, -500, d + 0.06);
+  beep(4700 * v, 0.04, 'sine', 0.015, -300, d + 0.11);
+}
+// giro do revólver: sopro de vento que sobe de tom
+function sfxSpin() {
+  noise(0.4, 0.07, 'bandpass', 500, 2200, 1.2, 0.05);
+  beep(300, 0.35, 'sine', 0.025, 500, 0.05);
+}
+// minigun: tiros curtos, com leve variação de tom para não soar repetitivo
+function sfxMini() {
+  noise(0.06, 0.15, 'lowpass', 5500 + Math.random() * 1500, 700, 0.7, 0, 0.1);
+  beep(130 + Math.random() * 40, 0.08, 'sine', 0.2, -90);
+  if (Math.random() < 0.3) noise(0.02, 0.06, 'highpass', 4000);
+}
+// caixa quebrando: estalo, madeira rachando, tábuas batendo e um toque especial por tipo
+function sfxBreak(type) {
+  noise(0.2, 0.26, 'bandpass', 2400, 600, 0.9, 0, 0.12);
+  noise(0.05, 0.16, 'highpass', 4200, 4200, 0.7);
+  beep(125, 0.2, 'sine', 0.3, -80);
+  for (let i = 0; i < 5; i++) {
+    const d = 0.03 + i * 0.035 + Math.random() * 0.02;
+    beep(220 + Math.random() * 520, 0.07, 'triangle', 0.11, -120, d);
+    noise(0.035, 0.09, 'bandpass', 1400 + Math.random() * 1800, 1000, 3, d);
+  }
+  if (type === 'gold') [1568, 2093, 2637].forEach((f, i) => beep(f, 0.3, 'sine', 0.06, 0, 0.05 + i * 0.06, 0.3));
+  else if (type === 'bolt') { noise(0.28, 0.14, 'bandpass', 4000, 900, 1.5); beep(1900, 0.22, 'sawtooth', 0.05, -1600); }
+  else if (type === 'minigun') { beep(330, 0.35, 'sawtooth', 0.06, 550, 0.02, 0.3); beep(660, 0.45, 'sine', 0.07, 0, 0.1, 0.4); }
 }
 
 // ---------- jogo ----------
@@ -131,7 +226,7 @@ function reset() {
   score = 0; shownScore = 0; lives = 5; level = 1; combo = 0; kills = 0;
   spawnTimer = 0.5; shootCd = 0; shake = 0; boom = 0;
   ammo = MAX_AMMO; runCoins = 0;
-  mini = 0; intro = 0;
+  mini = 0; intro = 0; spin = 0;
 }
 
 function spawnBox() {
@@ -196,7 +291,7 @@ function shootMini() {
   }
   if (Math.random() < 0.4) parts.push({ x: GUN.x, y: gunY() - 6, vx: side * (-80 - Math.random() * 80), vy: -240 - Math.random() * 100,
     life: 0.8, max: 0.8, size: 4, color: '#e0b84a', rot: 0, vr: 14 });
-  beep(160 + Math.random() * 60, 0.05, 'sawtooth', 0.035, -60);
+  sfxMini();
   shake = Math.max(shake, 2.5);
   if (mini <= 0) {
     floatText(GUN.x + 110 * side, gunY() - 60, T().miniOff, '#ff9f43');
@@ -205,7 +300,7 @@ function shootMini() {
 }
 // caixa minigun atingida: a tela se afasta e a minigun aparece
 function grantMinigun() {
-  mini = MINI_AMMO; intro = INTRO_TIME; held = false; shootCd = 0.3;
+  mini = MINI_AMMO; intro = INTRO_TIME; spin = 0; held = false; shootCd = 0.3;
   shake = Math.max(shake, 8);
   [440, 554, 659, 880, 1318].forEach((f, i) => setTimeout(() => beep(f, 0.18, 'triangle', 0.07), i * 110));
   setTimeout(() => beep(70, 0.9, 'sawtooth', 0.1, -20), 300);
@@ -214,9 +309,10 @@ function grantMinigun() {
 function shoot() {
   if (state !== 'play' || shootCd > 0 || intro > 0) return;
   if (mini > 0) { shootMini(); return; }
-  if (ammo <= 0) { shootCd = 0.25; beep(90, 0.06, 'square', 0.04); return; }
+  if (ammo <= 0) { shootCd = 0.25; beep(90, 0.05, 'square', 0.05); noise(0.03, 0.1, 'bandpass', 2500, 2500, 2); return; }
   ammo--;
   shootCd = 0.16;
+  if (equipped === 'revolver') { spin = SPIN_TIME; shootCd = SPIN_TIME; sfxSpin(); }   // cambalhota: o próximo tiro espera ela terminar
   const { x: mx, y: my } = muzzlePos();
   recoil = 12;
   bullets.push({ x: mx, y: my, px: mx, py: my, sx: mx, sy: my, vx: Math.cos(aim) * 3000, vy: Math.sin(aim) * 3000 });
@@ -237,8 +333,7 @@ function shoot() {
   parts.push({ x: GUN.x, y: g - 4, vx: side * (-60 - Math.random() * 60), vy: -260 - Math.random() * 80,
     life: 0.9, max: 0.9, size: 4, color: '#e0b84a', rot: 0, vr: 14 });
 
-  beep(220, 0.1, 'sawtooth', 0.05, -120);
-  beep(900, 0.04, 'square', 0.03, -500);
+  sfxShot();
   shake = Math.max(shake, 3);
 }
 
@@ -258,6 +353,7 @@ function update(dt) {
   const rel = Math.max(-1.35, Math.min(1.35, Math.atan2(mouse.y - gunY(), (mouse.x - GUN.x) * side)));
   aim = side > 0 ? rel : Math.PI - rel;
   shootCd -= dt;
+  spin = Math.max(0, spin - dt);
   const gdt = intro > 0 ? 0 : dt;   // durante a cena da minigun o jogo fica parado
   if (intro > 0) intro = Math.max(0, intro - dt);
   const gap = score - shownScore;
@@ -277,7 +373,7 @@ function update(dt) {
     }
   }
 
-  if (state === 'menu' || state === 'help' || state === 'settings') {
+  if (state === 'menu' || state === 'help' || state === 'settings' || state === 'shop') {
     spawnTimer -= dt;
     if (spawnTimer <= 0) { spawnBox(); spawnTimer = 0.9 + Math.random() * 0.6; }
   }
@@ -451,7 +547,8 @@ function hitBox(bx) {
   score += pts;
   shatter(bx);
   floatText(bx.x, bx.y, '+' + pts + (combo >= 3 ? '  x' + (1 + Math.floor(combo / 3)) : ''), '#fff');
-  beep(520 + Math.min(combo, 12) * 40, 0.12, 'triangle', 0.08);
+  sfxBreak(bx.type);
+  beep(520 + Math.min(combo, 12) * 40, 0.12, 'triangle', 0.05, 0, 0.04);   // tom sobe com o combo
   if (bx.type === 'gold') {
     if (mini <= 0) {
       ammo = Math.min(ammo + 1, BONUS_CAP);
@@ -597,6 +694,46 @@ function drawMiniBar() {
   text(String(mini), x + (side > 0 ? w - 12 : 12), y + h / 2 + 1, 18, '#fff', side > 0 ? 'right' : 'left');
   ctx.restore();
 }
+// munição da pistola: cartuchos de latão com ponta de cobre; bônus ficam verdes; os gastos viram contorno vazio
+function drawAmmo() {
+  const n = Math.max(MAX_AMMO, ammo), cw = 11, ch = 28, gap = 5, y = H - 20 - ch;
+  const low = ammo > 0 && ammo <= 2, pulse = 0.55 + 0.45 * Math.sin(performance.now() / 110);
+  for (let i = 0; i < n; i++) {
+    const x = side > 0 ? 20 + i * (cw + gap) : W - 20 - cw - i * (cw + gap);
+    const full = i < ammo, bonus = i >= MAX_AMMO;
+    const tipH = 10, bodyY = y + tipH;
+    // silhueta: ponta arredondada + estojo com aro na base
+    const shape = () => {
+      ctx.beginPath();
+      ctx.moveTo(x + 1, bodyY); ctx.quadraticCurveTo(x + 1, y + 1, x + cw / 2, y);
+      ctx.quadraticCurveTo(x + cw - 1, y + 1, x + cw - 1, bodyY);
+      ctx.lineTo(x + cw - 1, y + ch - 3); ctx.lineTo(x + cw, y + ch - 3); ctx.lineTo(x + cw, y + ch);
+      ctx.lineTo(x, y + ch); ctx.lineTo(x, y + ch - 3); ctx.lineTo(x + 1, y + ch - 3); ctx.closePath();
+    };
+    if (!full) {
+      shape(); ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 1.5; ctx.stroke();
+      continue;
+    }
+    ctx.save();
+    if (low) { ctx.shadowColor = 'rgba(255,70,50,' + pulse + ')'; ctx.shadowBlur = 10; }
+    shape(); ctx.fillStyle = '#000'; ctx.fill();   // base para a sombra
+    ctx.restore();
+    ctx.save(); shape(); ctx.clip();
+    const cg = ctx.createLinearGradient(x, 0, x + cw, 0);   // estojo: brilho vertical metálico
+    if (bonus) { cg.addColorStop(0, '#1f9a57'); cg.addColorStop(0.35, '#a6ffc6'); cg.addColorStop(1, '#2fb868'); }
+    else { cg.addColorStop(0, '#a8741a'); cg.addColorStop(0.35, '#ffe9a0'); cg.addColorStop(1, '#c88a1a'); }
+    ctx.fillStyle = cg; ctx.fillRect(x, bodyY, cw, ch - tipH);
+    const tg = ctx.createLinearGradient(x, 0, x + cw, 0);   // ponta
+    if (bonus) { tg.addColorStop(0, '#2f7f55'); tg.addColorStop(0.35, '#d6ffe4'); tg.addColorStop(1, '#4fbf80'); }
+    else { tg.addColorStop(0, '#8a3e18'); tg.addColorStop(0.35, '#ffb07a'); tg.addColorStop(1, '#b4551f'); }
+    ctx.fillStyle = tg; ctx.fillRect(x, y, cw, tipH);
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(x, bodyY - 1, cw, 1.5);               // junção ponta/estojo
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(x, y + ch - 5, cw, 1.5);                // ranhura do aro
+    ctx.restore();
+    shape(); ctx.strokeStyle = low ? '#ff9f8f' : 'rgba(20,12,0,0.75)'; ctx.lineWidth = 1.2; ctx.stroke();
+  }
+}
 function drawBox(bx) {
   ctx.save();
   ctx.translate(bx.x, bx.y); ctx.rotate(bx.rot);
@@ -639,17 +776,32 @@ const gunImg = new Image();
 gunImg.src = 'images/pistola.png';     // a imagem aponta para a esquerda: é espelhada ao desenhar
 const IMG_K = 0.17, IMG_PIVOT = { x: 1046, y: 240 };   // escala e ponto de giro (coords da imagem original)
 const MUZZLE_X = (1046 - 235) * IMG_K, MUZZLE_Y = 0;
+const revolverImg = new Image();
+revolverImg.src = 'images/revolver.png';   // aponta para a esquerda: é espelhada ao desenhar
+const REV_K = 0.08, REV_PIVOT = { x: 1587, y: 506 }, REV_MUZZLE_X = (1587 - 103) * REV_K;   // pivô no eixo do cano, perto do cão
+// armas da loja: imagem, recorte útil (sem margem transparente), escala, ponto de giro e ponta do cano
+const GUNS = {
+  pistol: { img: gunImg, crop: { x: 235, y: 152, w: 871, h: 552 }, k: IMG_K, pivot: IMG_PIVOT, muzzle: MUZZLE_X },
+  revolver: { img: revolverImg, crop: { x: 103, y: 306, w: 2082, h: 953 }, k: REV_K, pivot: REV_PIVOT, muzzle: REV_MUZZLE_X, spinAt: { x: 1420, y: 880 } },   // spinAt: gatilho (coords da imagem), centro da cambalhota
+};
 const miniImg = new Image();
 miniImg.src = 'images/minigun.png';   // aponta para a esquerda: é espelhada ao desenhar
 const MINI_K = 0.085, MINI_PIVOT = { x: 1728, y: 737 }, MINI_MUZZLE_X = (1728 - 64) * MINI_K;
-function muzzleLen() { return mini > 0 && intro <= 0 ? MINI_MUZZLE_X : MUZZLE_X; }   // ponta do cano em relação ao ponto de giro
+function muzzleLen() { return mini > 0 && intro <= 0 ? MINI_MUZZLE_X : GUNS[equipped].muzzle; }   // ponta do cano em relação ao ponto de giro
 let recoil = 0;
+let spin = 0;                // tempo restante da cambalhota do revólver (só dá outro tiro quando acaba)
+const SPIN_TIME = 0.5;
 function gunY() { return GUN.y + Math.sin(performance.now() / 400) * 8; }
 
 function drawGun() {
   const gy = gunY();
   ctx.save();
   ctx.translate(GUN.x, gy); ctx.rotate(aim);
+  if (spin > 0 && !(mini > 0 && intro <= 0)) {   // cambalhota para trás, girando em volta do gatilho
+    const G = GUNS[equipped], sa = G.spinAt || G.pivot;   // centro do giro: o gatilho, em coords locais (imagem espelhada)
+    const cx = G.k * (G.pivot.x - sa.x), cy = side * G.k * (sa.y - G.pivot.y);
+    ctx.translate(cx, cy); ctx.rotate(-side * Math.PI * 2 * smooth(1 - spin / SPIN_TIME)); ctx.translate(-cx, -cy);
+  }
   ctx.translate(-recoil, 0);
   if (mini > 0 && intro <= 0 && miniImg.complete && miniImg.naturalWidth) {
     if (held && shootCd > 0) ctx.translate((Math.random() - 0.5) * 2.5, (Math.random() - 0.5) * 2.5);   // vibra ao disparar
@@ -659,9 +811,10 @@ function drawGun() {
     recoil = Math.max(0, recoil - 80 * (1 / 60));
     return;
   }
-  if (gunImg.complete && gunImg.naturalWidth) {
-    ctx.scale(-IMG_K, side * IMG_K);   // espelha na horizontal
-    ctx.drawImage(gunImg, -IMG_PIVOT.x, -IMG_PIVOT.y);
+  const G = GUNS[equipped];
+  if (G.img.complete && G.img.naturalWidth) {
+    ctx.scale(-G.k, side * G.k);   // espelha na horizontal
+    ctx.drawImage(G.img, -G.pivot.x, -G.pivot.y);
     ctx.restore();
     recoil = Math.max(0, recoil - 80 * (1 / 60));
     return;
@@ -874,10 +1027,7 @@ function draw() {
     text(T().coins + ': ' + money(runCoins), W - 20, 62, 20, '#ffd23f', 'right');
     text('♥'.repeat(Math.max(lives, 0)), W - 20, 28, 26, '#ff5d6c', 'right');
     if (mini > 0) drawMiniBar();   // barra de balas da minigun
-    else for (let i = 0; i < Math.max(MAX_AMMO, ammo); i++) {
-      ctx.fillStyle = i < ammo ? (i >= MAX_AMMO ? '#6dff9a' : '#ffd76a') : '#ffffff22';
-      ctx.fillRect(side > 0 ? 20 + i * 14 : W - 28 - i * 14, H - 44, 8, 22);
-    }
+    else drawAmmo();
     if (combo >= 2) {   // aparece a cada acerto seguido, com um "pulo" a cada +1
       ctx.save(); ctx.translate(20, 78); ctx.scale(1 + 0.45 * comboPop, 1 + 0.45 * comboPop);
       const mult = 1 + Math.floor(combo / 3);
@@ -901,9 +1051,14 @@ const BTN_W = 280, BTN_H = 52;
 function buttons() {
   const list = {
     menu: [
-      { label: T().play, act: startGame },
-      { label: T().howto, act: () => state = 'help' },
-      { label: T().settings, act: () => state = 'settings' },
+      { label: T().howto, act: () => state = 'help', x: (W - 150) / 2, y: 282, w: 150, h: 30, small: true, fs: 14 },
+      { label: T().play, act: startGame, x: (W - BTN_W) / 2, y: 322 },
+      { label: T().shop, act: () => state = 'shop', x: (W - 200) / 2, y: 388, w: 200 },
+      { label: T().settings, act: () => state = 'settings', x: W - 14 - 44, y: 14, w: 44, h: 44, icon: 'gear' },
+    ],
+    shop: [
+      ...shopCards().map(c => c.button),
+      { label: T().back, act: () => state = 'menu', x: (W - BTN_W) / 2, y: 450 },
     ],
     settings: [
       { label: T().sound + ': ' + (soundOn ? T().on : T().off), act: () => setSound(!soundOn) },
@@ -921,14 +1076,15 @@ function buttons() {
       { label: T().menu, act: toMenu },
     ],
   }[state] || [];
-  const top = { menu: 305, help: 450, settings: 170, pause: 250, over: 340 }[state];
-  list.forEach((b, i) => { b.x = (W - BTN_W) / 2; b.y = top + i * 68; });
+  const top = { menu: 0, help: 450, settings: 170, shop: 450, pause: 250, over: 340 }[state];
+  const gap = 68;
+  list.forEach((b, i) => { if (b.x === undefined) { b.x = (W - BTN_W) / 2; b.y = top + i * gap; } });
   return list;
 }
 function startGame() { reset(); state = 'play'; }
 function toMenu() { reset(); state = 'menu'; spawnTimer = 0.3; }
 function hoverBtn() {
-  return buttons().find(b => mouse.x >= b.x && mouse.x <= b.x + BTN_W && mouse.y >= b.y && mouse.y <= b.y + BTN_H);
+  return buttons().find(b => !b.disabled && mouse.x >= b.x && mouse.x <= b.x + (b.w || BTN_W) && mouse.y >= b.y && mouse.y <= b.y + (b.h || BTN_H));
 }
 
 // ---------- cartões de recorde / carteira ----------
@@ -979,6 +1135,78 @@ function drawStats(y, sub) {
   drawStat(W / 2 + 115, y, 'coin', T().wallet, money(wallet), '#ffd23f', sub && sub.wallet);
 }
 
+// ---------- loja ----------
+function itemState(it) {
+  if (owned.includes(it.id)) return equipped === it.id ? 'equipped' : 'owned';
+  if (best < it.minBest) return 'locked';
+  if (wallet < it.price) return 'poor';
+  return 'buyable';
+}
+function buyItem(it) {
+  if (itemState(it) !== 'buyable') return;
+  wallet -= it.price; owned.push(it.id); equipped = it.id;
+  try { localStorage.setItem('stb_wallet', wallet); } catch (e) {}
+  saveShop();
+  [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.14, 'triangle', 0.07, 0, i * 0.07, 0.2));
+}
+// cartões da loja (posição + botão de cada item); cresce sozinho se entrarem mais itens
+function shopCards() {
+  const n = ITEMS.length, gap = n <= 3 ? 30 : 16;
+  const cw = Math.min(260, Math.floor((W - 40 - (n - 1) * gap) / n)), ch = 240, y = 165;
+  const x0 = (W - (n * cw + (n - 1) * gap)) / 2;
+  return ITEMS.map((it, i) => {
+    const x = x0 + i * (cw + gap), st = itemState(it);
+    const label = { equipped: T().equipped, owned: T().equip, locked: T().locked, poor: T().buy, buyable: T().buy }[st];
+    const act = st === 'owned' ? () => { equipped = it.id; saveShop(); beep(660, 0.08, 'triangle', 0.06); } : () => buyItem(it);
+    return { it, st, x, y, w: cw, h: ch,
+      button: { label, act, disabled: st === 'equipped' || st === 'locked' || st === 'poor', x: x + 20, y: y + ch - 54, w: cw - 40, h: 40, small: true, state: st } };
+  });
+}
+function drawShopCards() {
+  for (const c of shopCards()) {
+    const { it, st, x, y, w, h } = c, locked = st === 'locked', col = st === 'equipped' ? '#6dff9a' : locked ? '#6b6f8f' : '#ffd76a';
+    ctx.save();
+    ctx.shadowColor = col; ctx.shadowBlur = locked ? 0 : 12;
+    const g = ctx.createLinearGradient(0, y, 0, y + h);
+    g.addColorStop(0, '#3b4170'); g.addColorStop(1, '#1b1f3d');
+    ctx.fillStyle = g; ctx.strokeStyle = col; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 12); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    // arma
+    const G = GUNS[it.id], k = Math.min((w - 50) / G.crop.w, 80 / G.crop.h);
+    if (G.img.complete && G.img.naturalWidth) {
+      ctx.save(); ctx.globalAlpha = locked ? 0.35 : 1; ctx.imageSmoothingQuality = 'high';
+      const dw = G.crop.w * k, dh = G.crop.h * k;
+      ctx.drawImage(G.img, G.crop.x, G.crop.y, G.crop.w, G.crop.h, x + (w - dw) / 2, y + 14 + (80 - dh) / 2, dw, dh);
+      ctx.restore();
+    }
+    if (locked) text('🔒', x + w / 2, y + 54, 34, '#fff');
+    text(T()[it.id + 'Name'], x + w / 2, y + 120, 22, locked ? '#9aa0c8' : '#fff');
+    // preço / requisito
+    if (st === 'owned' || st === 'equipped') text(it.price ? '✓' : T().free, x + w / 2, y + 148, 16, '#6dff9a');
+    else {
+      text(money(it.price), x + w / 2, y + 146, 20, '#ffd23f');
+      if (locked) text(T().needBest + fmt(it.minBest), x + w / 2, y + 170, 14, '#ff7b7b');
+      else if (st === 'poor') text(T().noCoins, x + w / 2, y + 170, 14, '#ff7b7b');
+    }
+  }
+}
+// engrenagem das configurações: 8 dentes e furo no meio
+function drawGear(cx, cy, r, color, rot = 0) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
+  ctx.beginPath();
+  for (let k = 0; k < 8; k++) {
+    const a = k * Math.PI / 4;
+    for (const [da, rr] of [[-0.24, 0.72], [-0.15, 1], [0.15, 1], [0.24, 0.72]]) {
+      const x = Math.cos(a + da) * r * rr, y = Math.sin(a + da) * r * rr;
+      k === 0 && da === -0.24 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+  }
+  ctx.closePath();
+  ctx.moveTo(r * 0.34, 0); ctx.arc(0, 0, r * 0.34, 0, Math.PI * 2, true);
+  ctx.fillStyle = color; ctx.fill('evenodd');
+  ctx.restore();
+}
 function drawScreen() {
   ctx.fillStyle = state === 'menu' ? '#0006' : '#000b'; ctx.fillRect(-40, -40, W + 80, H + 80);
   if (state === 'menu') {
@@ -992,6 +1220,10 @@ function drawScreen() {
     drawStats(210);
   } else if (state === 'settings') {
     text(T().settings, W / 2, 80, 46, '#ffd76a');
+  } else if (state === 'shop') {
+    text(T().shop, W / 2, 50, 46, '#ffd76a');
+    drawStats(88);
+    drawShopCards();
   } else if (state === 'help') {
     text(T().howto, W / 2, 60, 46, '#ffd76a');
     const L = T().help;
@@ -1005,14 +1237,17 @@ function drawScreen() {
   }
   const hv = hoverBtn();
   for (const b of buttons()) {
-    const on = b === hv;
-    const bg = ctx.createLinearGradient(0, b.y, 0, b.y + BTN_H);
-    if (on) { bg.addColorStop(0, '#a8dcf5'); bg.addColorStop(1, '#3f93e0'); }
+    const on = !!hv && hv.x === b.x && hv.y === b.y;
+    const bw = b.w || BTN_W, bh = b.h || BTN_H;
+    const bg = ctx.createLinearGradient(0, b.y, 0, b.y + bh);
+    if (b.disabled) { bg.addColorStop(0, b.state === 'equipped' ? '#2a6b46' : '#2b2f4d'); bg.addColorStop(1, b.state === 'equipped' ? '#174a2e' : '#1b1e36'); }
+    else if (on) { bg.addColorStop(0, '#a8dcf5'); bg.addColorStop(1, '#3f93e0'); }
     else { bg.addColorStop(0, '#3b4170'); bg.addColorStop(1, '#1b1f3d'); }   // mesmo fundo do cartão de recorde
     ctx.fillStyle = bg;
-    ctx.strokeStyle = on ? '#fff' : '#6f98d8'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.roundRect(b.x, b.y, BTN_W, BTN_H, 10); ctx.fill(); ctx.stroke();
-    text(b.label, b.x + BTN_W / 2, b.y + BTN_H / 2 + 1, 22, on ? '#10204a' : '#fff');
+    ctx.strokeStyle = b.disabled ? (b.state === 'equipped' ? '#6dff9a' : '#4a4f78') : on ? '#fff' : '#6f98d8'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, bw, bh, 10); ctx.fill(); ctx.stroke();
+    if (b.icon === 'gear') { drawGear(b.x + bw / 2, b.y + bh / 2, 15, on ? '#10204a' : '#cfe0ff', on ? performance.now() / 1200 : 0); continue; }
+    text(b.label, b.x + bw / 2, b.y + bh / 2 + 1, b.fs || (b.small ? 18 : 22), b.disabled ? (b.state === 'equipped' ? '#6dff9a' : '#7b80a8') : on ? '#10204a' : '#fff');
   }
   cv.style.cursor = hv ? 'pointer' : 'default';
 }
@@ -1034,7 +1269,7 @@ addEventListener('pointerup', () => held = false);
 function togglePause() {
   if (state === 'play') { state = 'pause'; held = false; }
   else if (state === 'pause') state = 'play';
-  else if (state === 'help' || state === 'settings') state = 'menu';
+  else if (state === 'help' || state === 'settings' || state === 'shop') state = 'menu';
 }
 addEventListener('keydown', e => {
   if (e.code === 'Escape' || e.code === 'KeyP') { togglePause(); return; }
